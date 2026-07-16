@@ -61,7 +61,7 @@
     "SCORE_BATCH": "10",
     "DRAFT_BATCH": "5",
     "FIT_THRESHOLD": "40",
-    "DRY_RUN": "false"
+    "DRY_RUN": "true"
   }
   // Secrets (set with `wrangler secret put NAME`, mirror in .dev.vars for local):
   //   API_KEY            - bearer token for the dashboard and n8n
