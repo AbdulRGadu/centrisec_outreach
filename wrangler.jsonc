@@ -19,9 +19,8 @@
     {
       "binding": "DB",
       "database_name": "outreach-db",
-      // Placeholder works for local dev. For production: `wrangler d1 create outreach-db`
-      // and paste the returned database_id here.
-      "database_id": "00000000-0000-0000-0000-000000000000"
+      "database_id": "8307a595-cdbd-4baf-b3d9-79c4eb3bc442",
+      "migrations_dir": "./migrations"
     }
   ],
   "queues": {
@@ -43,7 +42,7 @@
     "crons": ["*/15 * * * *", "0 7-15/2 * * 1-5"]
   },
   "vars": {
-    "CF_ACCOUNT_ID": "<run `wrangler whoami` and paste the account id>",
+    "CF_ACCOUNT_ID": "c042400a63d2d3d81042613f4abef9c1",
     "AI_GATEWAY_ID": "outreach",
     "MODEL_STRONG": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
     "MODEL_FAST": "@cf/meta/llama-3.1-8b-instruct-fast",
@@ -52,7 +51,7 @@
     "ZOHO_ACCOUNT_ID": "<from GET https://mail.zoho.com/api/accounts during setup>",
     "FROM_EMAIL": "admin@centrisec.com",
     "FROM_NAME": "Centrisec Team",
-    "PUBLIC_BASE_URL": "https://centrisec-outreach.workers.dev",
+    "PUBLIC_BASE_URL": "https://centrisec-outreach.centrisec-com.workers.dev",
     "PHYSICAL_ADDRESS": "Lagos, Nigeria",
     "DAILY_SEND_CAP": "10",
     "DOMAIN_WEEKLY_CAP": "2",

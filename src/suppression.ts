@@ -1,6 +1,6 @@
 import { recordEvent } from './db';
 import type { Env } from './env';
-import { htmlResponse, jsonResponse, normalizeText } from './http';
+import { htmlResponse, isValidEmail, jsonResponse, normalizeText } from './http';
 import { safeEqualStrings } from './auth';
 import { domainOf } from './util/text';
 import type { LeadRow } from './types';
@@ -106,17 +106,22 @@ export async function handleSuppressionAdd(body: Record<string, unknown>, env: E
     return jsonResponse({ ok: false, error: "Provide kind ('email'|'domain') and value" }, 400);
   }
   const cleaned = kind === 'email' ? value : value.replace(/^@/, '');
+  if (kind === 'email' && !isValidEmail(cleaned)) {
+    return jsonResponse({ ok: false, error: 'Provide a valid email address' }, 400);
+  }
+  if (kind === 'domain' && !/^(?=.{1,190}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/.test(cleaned)) {
+    return jsonResponse({ ok: false, error: 'Provide a valid domain name' }, 400);
+  }
   await addSuppression(env.DB, kind, cleaned, reason);
   // Reflect immediately on any matching lead so it can't be drafted/approved.
-  if (kind === 'email') {
-    await env.DB
-      .prepare(
-        `UPDATE leads SET status = 'disqualified', updated_at = datetime('now')
-         WHERE email = ?1 AND status NOT IN ('unsubscribed','disqualified','bounced')`
-      )
-      .bind(cleaned)
-      .run();
-  }
+  await env.DB
+    .prepare(
+      `UPDATE leads SET status = 'disqualified', updated_at = datetime('now')
+       WHERE ${kind === 'email' ? 'email' : 'domain'} = ?1
+         AND status NOT IN ('unsubscribed','disqualified','bounced')`
+    )
+    .bind(cleaned)
+    .run();
   return jsonResponse({ ok: true });
 }
 

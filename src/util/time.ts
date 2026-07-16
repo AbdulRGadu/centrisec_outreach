@@ -35,6 +35,14 @@ export function dayString(tz: string, date = new Date()): string {
   return `${p.year}-${p.month}-${p.day}`;
 }
 
+/** Monday of the local calendar week, formatted as YYYY-MM-DD. */
+export function weekStartString(tz: string, date = new Date()): string {
+  const p = partsIn(tz, date);
+  const isoWeekday = WEEKDAYS[p.weekday ?? ''] ?? 1;
+  const localMidnight = Date.UTC(Number(p.year), Number(p.month) - 1, Number(p.day));
+  return new Date(localMidnight - (isoWeekday - 1) * 86_400_000).toISOString().slice(0, 10);
+}
+
 /** Minutes since local midnight and ISO weekday (Mon=1..Sun=7) in the timezone. */
 export function localNow(tz: string, date = new Date()): { minutesOfDay: number; isoWeekday: number } {
   const p = partsIn(tz, date);

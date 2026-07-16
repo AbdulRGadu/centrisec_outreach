@@ -2,7 +2,7 @@ import { recordEvent } from './db';
 import { intVar, type Env } from './env';
 import { addSuppression, isSuppressed, unsubTokenFor } from './suppression';
 import type { LeadRow, MessageRow } from './types';
-import { dayString, isInSendWindow, secondsToNextWindowOpen } from './util/time';
+import { dayString, isInSendWindow, secondsToNextWindowOpen, weekStartString } from './util/time';
 import { ensureFooter, unsubscribeUrl } from './util/text';
 import { getAccessToken, sendMail, ZohoError } from './zoho';
 
@@ -25,6 +25,16 @@ async function decrementCounter(env: Env, day: string): Promise<void> {
     .run();
 }
 
+async function decrementDomainCounter(env: Env, weekStart: string, domain: string): Promise<void> {
+  await env.DB
+    .prepare(
+      `UPDATE domain_send_counters SET count = count - 1
+       WHERE week_start = ?1 AND domain = ?2 AND count > 0`
+    )
+    .bind(weekStart, domain)
+    .run();
+}
+
 /** Atomically take one send slot for the day. Returns false when the cap is reached. */
 async function takeDailySlot(env: Env, day: string, cap: number): Promise<boolean> {
   const attempt = () =>
@@ -35,6 +45,26 @@ async function takeDailySlot(env: Env, day: string, cap: number): Promise<boolea
   let res = await attempt();
   if ((res.meta.changes ?? 0) > 0) return true;
   await env.DB.prepare(`INSERT OR IGNORE INTO send_counters (day, count) VALUES (?1, 0)`).bind(day).run();
+  res = await attempt();
+  return (res.meta.changes ?? 0) > 0;
+}
+
+/** Atomically reserve one weekly slot for a recipient domain. */
+async function takeDomainSlot(env: Env, weekStart: string, domain: string, cap: number): Promise<boolean> {
+  const attempt = () =>
+    env.DB
+      .prepare(
+        `UPDATE domain_send_counters SET count = count + 1
+         WHERE week_start = ?1 AND domain = ?2 AND count < ?3`
+      )
+      .bind(weekStart, domain, cap)
+      .run();
+  let res = await attempt();
+  if ((res.meta.changes ?? 0) > 0) return true;
+  await env.DB
+    .prepare(`INSERT OR IGNORE INTO domain_send_counters (week_start, domain, count) VALUES (?1, ?2, 0)`)
+    .bind(weekStart, domain)
+    .run();
   res = await attempt();
   return (res.meta.changes ?? 0) > 0;
 }
@@ -127,17 +157,11 @@ export async function processSend(env: Env, messageId: string): Promise<SendOutc
     return { action: 'retry', delaySeconds: delay, reason: 'daily cap reached' };
   }
 
-  // Gate 5: per-domain courtesy cap (don't pile onto one company).
+  // Gate 5: per-domain courtesy cap (don't pile onto one company). The slot
+  // is reserved atomically so concurrent queue consumers cannot exceed it.
   const domainCap = intVar(env.DOMAIN_WEEKLY_CAP, 2);
-  const domainSends = await env.DB
-    .prepare(
-      `SELECT COUNT(*) AS n FROM messages
-       WHERE direction = 'outbound' AND status = 'sent'
-         AND to_email LIKE '%@' || ?1 AND sent_at > datetime('now','-7 days')`
-    )
-    .bind(lead.domain)
-    .first<{ n: number }>();
-  if ((domainSends?.n ?? 0) >= domainCap) {
+  const weekStart = weekStartString(env.TIMEZONE);
+  if (!(await takeDomainSlot(env, weekStart, lead.domain, domainCap))) {
     await decrementCounter(env, day);
     await recordEvent(env.DB, lead.id, 'send_deferred', { message_id: messageId, reason: 'domain_cap' });
     return { action: 'retry', delaySeconds: clampDelay(86_400), reason: 'domain weekly cap' };
@@ -153,6 +177,7 @@ export async function processSend(env: Env, messageId: string): Promise<SendOutc
     .run();
   if ((claim.meta.changes ?? 0) === 0) {
     await decrementCounter(env, day);
+    await decrementDomainCounter(env, weekStart, lead.domain);
     return { action: 'ack', reason: 'claimed elsewhere' };
   }
 
@@ -186,6 +211,7 @@ export async function processSend(env: Env, messageId: string): Promise<SendOutc
         .run();
       await addSuppression(env.DB, 'email', lead.email, 'bounce', messageId);
       await decrementCounter(env, day);
+      await decrementDomainCounter(env, weekStart, lead.domain);
       await recordEvent(env.DB, lead.id, 'send_failed', { message_id: messageId, kind: 'permanent' });
       return { action: 'ack', reason: 'permanent send failure' };
     }
@@ -193,6 +219,7 @@ export async function processSend(env: Env, messageId: string): Promise<SendOutc
     const messageText = err instanceof Error ? err.message : String(err);
     await revertToQueued(env, messageId, messageText);
     await decrementCounter(env, day);
+    await decrementDomainCounter(env, weekStart, lead.domain);
     await recordEvent(env.DB, lead.id, 'send_failed', { message_id: messageId, kind });
     const delay = kind === 'auth' ? 3600 : 900;
     return { action: 'retry', delaySeconds: clampDelay(delay), reason: `send error (${kind})` };

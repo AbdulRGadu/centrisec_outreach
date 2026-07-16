@@ -1,6 +1,7 @@
 node_modules/
 .wrangler/
 .dev.vars
+secrets*.txt
 dist/
 *.log
 .DS_Store
