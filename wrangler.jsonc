@@ -55,13 +55,13 @@
     "PHYSICAL_ADDRESS": "Lagos, Nigeria",
     "DAILY_SEND_CAP": "10",
     "DOMAIN_WEEKLY_CAP": "2",
-    "SEND_WINDOW": "09:00-17:00",
-    "SEND_DAYS": "1,2,3,4,5",
+    "SEND_WINDOW": "00:00-23:59",
+    "SEND_DAYS": "1,2,3,4,5,6,7",
     "TIMEZONE": "Africa/Lagos",
     "SCORE_BATCH": "10",
     "DRAFT_BATCH": "5",
     "FIT_THRESHOLD": "40",
-    "DRY_RUN": "true"
+    "DRY_RUN": "false"
   }
   // Secrets (set with `wrangler secret put NAME`, mirror in .dev.vars for local):
   //   API_KEY            - bearer token for the dashboard and n8n
