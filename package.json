@@ -12,6 +12,7 @@
     "dev": "wrangler dev --port 8788 --ip 127.0.0.1",
     "deploy": "wrangler deploy",
     "check": "tsc --noEmit",
+    "test": "node --experimental-strip-types --test test/*.test.ts",
     "db:migrate:local": "wrangler d1 migrations apply outreach-db --local",
     "db:migrate:remote": "wrangler d1 migrations apply outreach-db --remote",
     "context:pull": "node scripts/pull-website-context.mjs"

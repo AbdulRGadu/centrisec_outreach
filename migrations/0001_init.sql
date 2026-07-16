@@ -40,7 +40,7 @@ CREATE TABLE messages (
   body       TEXT,
   from_email TEXT,
   to_email   TEXT,
-  classification  TEXT,                           -- inbound: interested|wants_demo|more_info|referral|not_now|not_interested|remove_me|out_of_office|bounce|unclear
+  classification  TEXT,                           -- inbound classification; taxonomy is versioned in src/ai/schemas.ts
   confidence      REAL,                           -- inbound, 0-1
   summary         TEXT,                           -- inbound, one-line AI summary for the team
   suggested_reply TEXT,                           -- inbound, positive classes only; never auto-sent
@@ -62,7 +62,7 @@ CREATE TABLE suppression (
   id         TEXT PRIMARY KEY,
   kind       TEXT NOT NULL CHECK (kind IN ('email','domain')),
   value      TEXT NOT NULL,                       -- lowercased email or bare domain
-  reason     TEXT NOT NULL,                       -- remove_me|not_interested|bounce|unsubscribe|manual
+  reason     TEXT NOT NULL,                       -- remove_me|not_interested|complaint|hard_bounce|unsubscribe|manual
   source_message_id TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );

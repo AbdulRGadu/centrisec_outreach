@@ -1,4 +1,5 @@
 import { runJson, type ChatMessage } from './ai/client';
+import { activeAiModel } from './ai/models';
 import { buildDraftMessages, buildScoringMessages, PROMPT_VERSION } from './ai/prompts';
 import { draftJsonSchema, draftResult, scoreJsonSchema, scoreResult } from './ai/schemas';
 import { recordEvent } from './db';
@@ -7,10 +8,11 @@ import { HttpError } from './http';
 import { getLead } from './leads';
 import { isSuppressed } from './suppression';
 import type { LeadRow, MessageRow } from './types';
-import { wordCount } from './util/text';
+import { normalizeEmailBody, validateDraftQuality, wordCount } from './util/text';
 
 export async function scoreLead(env: Env, lead: LeadRow): Promise<LeadRow> {
-  const result = await runJson(env, env.MODEL_FAST, buildScoringMessages(lead), scoreJsonSchema, scoreResult);
+  const model = await activeAiModel(env);
+  const result = await runJson(env, model, buildScoringMessages(lead), scoreJsonSchema, scoreResult);
   const fitScore = Math.round(result.fit_score);
   await env.DB
     .prepare(
@@ -35,7 +37,7 @@ export async function draftLead(env: Env, lead: LeadRow, opts?: { force?: boolea
 
   const suppressedReason = await isSuppressed(env.DB, lead.email, lead.domain);
   if (suppressedReason) throw new HttpError(409, `Lead is suppressed (${suppressedReason})`);
-  if (['unsubscribed', 'bounced', 'disqualified'].includes(lead.status)) {
+  if (['suppressed', 'failed', 'not_interested'].includes(lead.status)) {
     throw new HttpError(409, `Lead status is '${lead.status}' - reactivate it first if intentional`);
   }
 
@@ -43,12 +45,12 @@ export async function draftLead(env: Env, lead: LeadRow, opts?: { force?: boolea
     .prepare(
       `SELECT id, status FROM messages
        WHERE lead_id = ?1 AND direction = 'outbound'
-         AND status IN ('draft','approved','queued','sending','sent','send_unknown')`
+         AND status IN ('draft','needs_review','approved','queued','sending','sent','send_unknown')`
     )
     .bind(lead.id)
     .all<{ id: string; status: string }>();
-  const hardBlockers = existing.results.filter((m) => m.status !== 'draft');
-  const openDrafts = existing.results.filter((m) => m.status === 'draft');
+  const hardBlockers = existing.results.filter((m) => !['draft', 'needs_review'].includes(m.status));
+  const openDrafts = existing.results.filter((m) => ['draft', 'needs_review'].includes(m.status));
   if (hardBlockers.length > 0 && !force) {
     throw new HttpError(409, 'One cold email per lead: an email is already queued or sent. Pass force:true to override.');
   }
@@ -60,7 +62,7 @@ export async function draftLead(env: Env, lead: LeadRow, opts?: { force?: boolea
       await env.DB
         .prepare(
           `UPDATE messages SET status = 'rejected', error = 'superseded by a new draft', updated_at = datetime('now')
-           WHERE id = ?1 AND status = 'draft'`
+           WHERE id = ?1 AND status IN ('draft','needs_review')`
         )
         .bind(d.id)
         .run();
@@ -68,53 +70,75 @@ export async function draftLead(env: Env, lead: LeadRow, opts?: { force?: boolea
   }
 
   const baseMessages = buildDraftMessages(env, lead);
-  let result = await runJson(env, env.MODEL_STRONG, baseMessages, draftJsonSchema, draftResult, {
+  const model = await activeAiModel(env);
+  let result = await runJson(env, model, baseMessages, draftJsonSchema, draftResult, {
     maxTokens: 1200,
   });
-  const words = wordCount(result.body);
-  if (words < 100 || words > 200) {
+  let normalizedBody = normalizeEmailBody(result.body);
+  let quality = validateDraftQuality(result.subject, result.body, lead);
+  if (!quality.valid) {
     const corrective: ChatMessage[] = [
       ...baseMessages,
       { role: 'assistant', content: JSON.stringify(result) },
       {
         role: 'user',
-        content: `That body is ${words} words. Rewrite it to 120-180 words, keeping the guide's structure. Return ONLY the JSON object.`,
+        content:
+          `Rewrite the draft to fix every issue: ${quality.warnings.join(' ')} ` +
+          `Keep the body under 130 words, subject under 8 words, short paragraphs, and one CTA. ` +
+          `Return ONLY the JSON object.`,
       },
     ];
     try {
-      result = await runJson(env, env.MODEL_STRONG, corrective, draftJsonSchema, draftResult, {
+      result = await runJson(env, model, corrective, draftJsonSchema, draftResult, {
         maxTokens: 1200,
       });
+      normalizedBody = normalizeEmailBody(result.body);
+      quality = validateDraftQuality(result.subject, result.body, lead);
     } catch {
-      // keep the first draft; the human reviewer sees the word count anyway
+      // Keep the first result as needs_review; a human can safely edit or reject it.
     }
   }
+
+  normalizedBody = normalizeEmailBody(result.body);
+  const normalizedQuality = validateDraftQuality(result.subject, normalizedBody, lead);
+  quality = {
+    valid: quality.valid && normalizedQuality.valid,
+    warnings: [...new Set([...quality.warnings, ...normalizedQuality.warnings])],
+  };
+  const status = quality.valid ? 'draft' : 'needs_review';
+  const warning = quality.valid ? null : `Draft quality warning: ${quality.warnings.join(' ')}`.slice(0, 500);
 
   const id = crypto.randomUUID();
   await env.DB
     .prepare(
-      `INSERT INTO messages (id, lead_id, direction, status, subject, body, from_email, to_email, ai_model, prompt_version)
-       VALUES (?1, ?2, 'outbound', 'draft', ?3, ?4, ?5, ?6, ?7, ?8)`
+      `INSERT INTO messages (id, lead_id, direction, status, subject, body, from_email, to_email, ai_model, prompt_version, error)
+       VALUES (?1, ?2, 'outbound', ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)`
     )
     .bind(
       id,
       lead.id,
+      status,
       result.subject.trim().slice(0, 150),
-      result.body.trim(),
+      normalizedBody,
       env.FROM_EMAIL,
       lead.email,
-      env.MODEL_STRONG,
-      PROMPT_VERSION
+      model,
+      PROMPT_VERSION,
+      warning
     )
     .run();
   await env.DB
     .prepare(
       `UPDATE leads SET status = 'drafted', updated_at = datetime('now')
-       WHERE id = ?1 AND status IN ('new','scored','drafted','sent','replied')`
+       WHERE id = ?1 AND status IN ('new','scored','drafted','sent','manual_review','not_now')`
     )
     .bind(lead.id)
     .run();
-  await recordEvent(env.DB, lead.id, 'drafted', { message_id: id, words: wordCount(result.body) });
+  await recordEvent(env.DB, lead.id, 'drafted', {
+    message_id: id,
+    words: wordCount(normalizedBody),
+    review: status === 'needs_review',
+  });
 
   const message = await env.DB.prepare('SELECT * FROM messages WHERE id = ?1').bind(id).first<MessageRow>();
   if (!message) throw new HttpError(500, 'Draft insert failed');
@@ -158,7 +182,7 @@ export async function advancePipeline(
          AND NOT EXISTS (
            SELECT 1 FROM messages m
            WHERE m.lead_id = leads.id AND m.direction = 'outbound'
-             AND m.status IN ('draft','approved','queued','sending','sent','send_unknown')
+             AND m.status IN ('draft','needs_review','approved','queued','sending','sent','send_unknown')
          )
        ORDER BY fit_score DESC LIMIT ?2`
     )

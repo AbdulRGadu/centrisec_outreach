@@ -1,76 +1,60 @@
-# Centrisec — Cold Email Guide
+# Centrisec Cold Email Guide
 
-The drafting AI must follow this structure. The goal is one short, useful, personal email —
-never a blast. The reader should feel it was written for their company specifically.
+The drafting AI writes one short, useful first-touch email for one prospect. This is
+controlled prospecting, not a newsletter, sequence, or drip campaign.
 
-## Structure (in order)
+## Keep the parties separate
 
-1. **Greeting** — "Hi {first name}," (or "Hello," if no first name is known).
-2. **Intro** — one line: reaching out from Centrisec.
-3. **What we do** — one sentence, framed as *before it becomes a costly incident*:
-   identifying and reducing cybersecurity risks — from phishing and employee awareness to
-   protecting business systems, sensitive data, and critical operations.
-4. **Industry bridge** — "Since {company} operates in {industry}…" then name 2-3 systems
-   that actually matter in their segment (from segments.md). This is the personalization
-   core: a fintech should read about payment platforms and partner due diligence, a school
-   about student records and a one-person IT team — never the same generic list for everyone.
-5. **Overlooked-gaps insight** — many organisations protect the perimeter but overlook
-   excessive user access, weak authentication, employee awareness, and the process for
-   responding when something goes wrong. Pick the one or two most relevant to the segment.
-6. **The offer** — we've put together a short security readiness checklist that helps spot
-   common gaps without a complex technical assessment. (Offered, not attached, not linked.)
-7. **Soft CTA** — a single question: "Would it be useful if I sent over a short proposal
-   outlining how Centrisec could support your current security priorities?"
-8. **Sign-off** — "Best," then the sender's name, then "Centrisec". Nothing else — the
-   system appends the identity/address/opt-out footer automatically.
+- Sender company: **Centrisec**.
+- Prospect company: the lead's `prospect_company`.
+- Prospect industry: the lead's `prospect_industry`.
+- Never use Centrisec as the prospect company unless the lead is actually Centrisec.
+- Never write "Since Centrisec operates..." for another prospect.
 
-Somewhere in steps 3-6, weave in exactly ONE "Why Centrisec" differentiator from
-company.md, chosen for the recipient. It must read as part of the sentence, not a slogan.
+## Structure
 
-## Reference example (approved by the founder — match this register)
+1. Greeting: `Hi {first name},` or `Hello,` when the name is unavailable.
+2. One short line that says the sender is reaching out from Centrisec.
+3. One short paragraph explaining a practical way Centrisec helps.
+4. One sector-based relevance paragraph using the prospect's real industry or segment.
+5. One helpful offer, normally the short security readiness checklist.
+6. One soft question as the only CTA.
+7. Sign off once with `Best,` and `Centrisec Team`.
 
-Placeholders like {{first_name}} are illustrative; real drafts must be fully rendered
-with the actual name, company, and industry. {{sender_contact_footer}} is appended by
-the system — never write it.
+The system adds the final identity, address, and reply-based opt-out footer. The AI must
+not add a footer or unsubscribe wording.
+
+## Approved register
 
 > Hi {{first_name}},
 >
 > I'm reaching out from Centrisec.
 >
-> We help organisations identify and reduce cybersecurity risks before they become costly
-> incidents — from phishing and employee security awareness to protecting business systems,
-> sensitive data, and critical operations.
+> We help teams review practical cybersecurity areas like access control, staff awareness,
+> incident readiness, and protection of sensitive business data.
 >
-> Since {{company_name}} operates in {{industry}}, systems that support daily operations —
-> such as HR management portals, employee accounts, customer databases, financial
-> applications, and cloud platforms — are often key areas where security gaps can develop.
+> For organisations in {{prospect_industry}}, these checks are often useful because security
+> gaps can appear across everyday systems, not just public-facing apps.
 >
-> Many organisations focus on protecting their external systems but overlook areas like
-> excessive user access, weak authentication practices, employee awareness, and the
-> processes used to respond when something goes wrong.
+> We put together a short security readiness checklist that helps teams identify common gaps
+> without starting with a heavy technical assessment.
 >
-> We've put together a short security readiness checklist that helps organisations identify
-> common security gaps without requiring a complex technical assessment.
->
-> Would it be useful if I sent over a short proposal outlining how Centrisec could support
-> your current security priorities?
+> Would it be useful if I sent it over?
 >
 > Best,
-> {{sender_name}}
-> Centrisec
+> Centrisec Team
 
-Note: the example's systems list is the generic set — used only when the industry is
-unknown. For a known segment, replace it with that segment's systems from segments.md.
+Placeholders are illustrative only. Real drafts must render known values and write naturally
+around missing values.
 
 ## Hard rules
 
-- 120-180 words for the body. Plain text only.
-- Subject line: under 60 characters, plain and specific, no clickbait, no ALL CAPS,
-  no "Re:"/"Fwd:" tricks, no emoji. Good register: "Security readiness at {company}",
-  "Reducing security gaps at {company}", "A question about {company}'s security priorities".
-- No links. No attachments. No pricing. No placeholders left in the text.
-- No fake familiarity ("I loved your recent post…", "I've been following you…").
-- No invented facts about the recipient or their company. Industry-typical statements only.
-- No jargon. No fear-mongering. No superlatives.
-- One email = one idea + one question. Never stack multiple CTAs.
-- Do not write an unsubscribe line or footer — the system appends it.
+- Body under 140 words. Subject under 8 words.
+- Plain text with short paragraphs and readable blank lines.
+- One email, one idea, one question, one CTA.
+- Use sector-based relevance; do not invent company-specific facts.
+- Do not claim gaps, weak authentication, vulnerabilities, or scan findings without verified evidence.
+- No aggressive urgency, fear marketing, fake familiarity, long service lists, pricing, links, or attachments.
+- Avoid spammy phrases including "guaranteed", "limited time", and "act now".
+- Never include a standalone em dash separator.
+- Do not add a footer. The system handles final footer formatting.

@@ -12,25 +12,25 @@ export const SEGMENTS = [
 ] as const;
 
 export const CLASSIFICATIONS = [
-  'interested',
-  'wants_demo',
-  'more_info',
-  'referral',
+  'positive_interest',
+  'meeting_request',
+  'asks_for_more_info',
+  'referral_to_colleague',
   'not_now',
   'not_interested',
   'remove_me',
   'out_of_office',
-  'bounce',
+  'bounce_or_auto_reply',
   'unclear',
 ] as const;
 
 export type Classification = (typeof CLASSIFICATIONS)[number];
 
 export const POSITIVE_CLASSIFICATIONS: ReadonlySet<string> = new Set([
-  'interested',
-  'wants_demo',
-  'more_info',
-  'referral',
+  'positive_interest',
+  'meeting_request',
+  'asks_for_more_info',
+  'referral_to_colleague',
 ]);
 
 // --- Scoring ---
@@ -103,4 +103,71 @@ export const suggestedReplyJsonSchema = {
     reply_body: { type: 'string' },
   },
   required: ['reply_body'],
+} as const;
+
+// --- Discovery research structuring ---
+
+const shortList = z.array(z.string().min(1).max(240)).max(6);
+
+export const discoveryEnrichmentResult = z.object({
+  company_summary: z.string().min(1).max(700),
+  industry: z.string().max(120),
+  country: z.string().max(100),
+  company_size: z.string().max(80),
+  company_fit_score: z.number().min(0).max(100),
+  role_relevance_score: z.number().min(0).max(100),
+  timing_signal_score: z.number().min(0).max(100),
+  data_confidence: z.number().min(0).max(100),
+  score_reason: z.string().min(1).max(500),
+  why_relevant: z.string().min(1).max(500),
+  verified_facts: shortList,
+  security_relevance: shortList,
+  contact_relevance: shortList,
+  personalization_hooks: shortList,
+  do_not_claim: shortList,
+  research_gaps: shortList,
+});
+export type DiscoveryEnrichmentResult = z.infer<typeof discoveryEnrichmentResult>;
+
+const score = { type: 'integer', minimum: 0, maximum: 100 } as const;
+const strings = { type: 'array', items: { type: 'string' }, maxItems: 6 } as const;
+
+export const discoveryEnrichmentJsonSchema = {
+  type: 'object',
+  properties: {
+    company_summary: { type: 'string' },
+    industry: { type: 'string' },
+    country: { type: 'string' },
+    company_size: { type: 'string' },
+    company_fit_score: score,
+    role_relevance_score: score,
+    timing_signal_score: score,
+    data_confidence: score,
+    score_reason: { type: 'string' },
+    why_relevant: { type: 'string' },
+    verified_facts: strings,
+    security_relevance: strings,
+    contact_relevance: strings,
+    personalization_hooks: strings,
+    do_not_claim: strings,
+    research_gaps: strings,
+  },
+  required: [
+    'company_summary',
+    'industry',
+    'country',
+    'company_size',
+    'company_fit_score',
+    'role_relevance_score',
+    'timing_signal_score',
+    'data_confidence',
+    'score_reason',
+    'why_relevant',
+    'verified_facts',
+    'security_relevance',
+    'contact_relevance',
+    'personalization_hooks',
+    'do_not_claim',
+    'research_gaps',
+  ],
 } as const;

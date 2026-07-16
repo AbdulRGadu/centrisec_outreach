@@ -1,159 +1,190 @@
 # Centrisec Outreach
 
-AI-assisted outbound prospecting and reply qualification for Centrisec. Not bulk email:
-the system finds the right leads, writes **one** relevant, personalized first email per
-lead, understands replies, and moves warm prospects toward a sales/demo conversation.
+A controlled cold outbound prospecting system for Centrisec. It creates one personalized,
+human-approved email per lead. It is not a newsletter, drip campaign, or automated follow-up system.
 
+```text
+gather leads
+→ store leads in D1
+→ score and personalize one email per lead
+→ human review and approval
+→ queue and send through Zoho
+→ monitor replies through n8n
+→ classify replies in the Worker
+→ move positive replies into the next sales step
+→ leave non-replies alone unless manually selected later
 ```
-n8n (intake, reply monitor, alerts)
-   │  POST /api/leads            POST /api/replies
-   ▼                                   ▲
-Cloudflare Worker ── Workers AI (via AI Gateway): scoring · drafting · classification
-   │        │                          │
-   D1       Cloudflare Queue ──► Zoho Mail API (send from admin@centrisec.com)
- (truth)      (paced sending)          │
-   ▲                                   ▼
- Admin dashboard (/admin)        Replies land in Zoho inbox → n8n
+
+## Architecture
+
+```text
+n8n (lead intake, Zoho inbox monitor, team alerts, optional CRM sync)
+   │  POST /api/leads                    POST /replies/ingest
+   ▼                                             ▲
+Cloudflare Worker + admin dashboard ── AI Gateway / Workers AI
+   │                     │                    scoring, drafting,
+   │                     │                    reply classification
+   ▼                     ▼
+  D1                Cloudflare Queue ──► Zoho Mail API
+(source of truth)       (paced sending)      (approved mail only)
 ```
 
-## How it works
+D1 owns leads, messages, model settings, reply/sales state, suppression, events, and counters.
+The queue only performs approved delivery. n8n never owns lead state, sending limits, approval,
+or suppression and never sends cold email directly.
 
-1. **Intake** — n8n (Google Sheets) or the dashboard POSTs leads. The Worker lowercases,
-   validates, dedupes by email (same-domain contacts are allowed but flagged), and
-   drops anything on the suppression list.
-2. **Scoring** — a cron scores new leads with Workers AI against Centrisec's ICP:
-   segment (fintech/healthcare/school/logistics/saas/enterprise/sme/other), fit 0-100,
-   pain points. Low-fit leads stay put for human judgment.
-3. **Drafting** — fit leads get one AI-drafted email following `context/email-guide.md`:
-   industry-bridged, one differentiator, 120-180 words, plain text, no links.
-4. **Human approval** — every email is reviewed in the dashboard (edit → approve).
-   Nothing sends without a human clicking Approve. No exceptions.
-5. **Sending** — approved emails go through a Cloudflare Queue. At send time the Worker
-   re-checks suppression, the one-email-per-lead rule, the business-hours window
-   (Mon-Fri 09-17 Lagos), the daily cap, and a per-domain weekly cap - then sends via
-   the Zoho Mail API from a real mailbox.
-6. **Replies** — n8n watches the Zoho inbox and POSTs replies back. AI classifies them
-   (interested / wants_demo / more_info / referral / not_now / not_interested /
-   remove_me / out_of_office / bounce / unclear); remove-me and bounces auto-suppress;
-   positive replies get a suggested response (never auto-sent) and a Telegram alert.
-7. **No auto follow-ups** — non-repliers stay inactive unless manually reactivated.
+## System flow
 
-## The AI's knowledge lives in `context/*.md`
+1. Lead intake validates and deduplicates business addresses, while allowing multiple contacts
+   at one domain. Suppressed contacts are rejected immediately.
+2. The active AI model scores new leads against Centrisec's ICP and records a segment, fit score,
+   fit reason, and sector-relevant pain points.
+3. Drafting clearly separates Centrisec (sender) from the lead's company and industry. It produces
+   one subject under 8 words and one plain-text body under 130 words.
+4. The Worker normalizes paragraph spacing and runs deterministic quality checks. One regeneration
+   is attempted. A second failure is saved as `needs_review` with a visible dashboard warning.
+5. A person edits and approves every email. Approved messages enter the queue; send-time gates
+   re-check suppression, one-email-per-lead, time window, daily cap, and domain cap.
+6. n8n watches Zoho and posts inbound replies to the Worker. The Worker applies deterministic
+   opt-outs, classifies other replies, updates the next sales step, and creates reply drafts only.
+7. Non-replies receive no automatic follow-up. Manual reactivation is the only way back into drafting.
 
-`company.md` (who Centrisec is + "Why Centrisec" differentiators + tone rules),
-`services.md`, `segments.md` (per-industry systems, gaps, angles), `email-guide.md`
-(the approved email structure and reference example).
+## AI model selection
 
-These files are **bundled into the Worker at deploy** (see `rules` in `wrangler.jsonc`),
-so the project is fully self-contained — copy this folder anywhere and it still works.
-To change how emails read: edit the markdown, `pnpm deploy`. No code changes.
-`pnpm context:pull` fetches the live site's `llms.txt` into `context/website-snapshot.md`
-as editing reference (never read at runtime).
+The dashboard **Settings** tab shows the provider, active model, fallback model, and configured choices.
+The selection is stored in D1 under `config.active_ai_model` and is used for future lead scoring,
+draft generation, reply classification, and suggested reply drafts.
+
+```jsonc
+"AI_PROVIDER": "cloudflare_ai_gateway",
+"DEFAULT_AI_MODEL": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+"AVAILABLE_AI_MODELS": "@cf/meta/llama-3.3-70b-instruct-fp8-fast,@cf/meta/llama-3.1-8b-instruct-fast"
+```
+
+If the D1 selection is missing or no longer allowed, `DEFAULT_AI_MODEL` is used safely.
+
+## Draft formatting and quality
+
+`normalizeEmailBody()` in `src/util/text.ts` runs before drafts are saved and again before sending.
+It normalizes line endings, creates readable paragraph breaks, separates greetings/CTA/signoff,
+removes duplicate Centrisec signoffs, strips standalone em-dash separators, removes generated
+footers, and removes visible unsubscribe URLs.
+
+Draft validation rejects or regenerates sender/prospect confusion, long subjects/bodies, one-paragraph
+blobs, multiple CTAs, unverified vulnerability claims, fake urgency, spam phrases, duplicate signoffs,
+standalone em dashes, and visible unsubscribe URLs.
+
+The system appends this footer exactly once at send time:
+
+```text
+Centrisec | Managed Cybersecurity
+Lagos, Nigeria
+
+If this is not relevant, reply “no” and we will not contact you again.
+```
+
+`VISIBLE_UNSUBSCRIBE_URL_ENABLED` defaults to `false` because a long visible tracking-style URL makes
+a one-to-one cold email feel like a campaign. The existing signed HMAC `/unsubscribe` endpoint remains
+available internally and can be explicitly enabled. Suppression logic is never disabled.
+
+## Reply classification and next steps
+
+The reply taxonomy is:
+
+`positive_interest`, `meeting_request`, `asks_for_more_info`, `referral_to_colleague`, `not_now`,
+`not_interested`, `remove_me`, `out_of_office`, `bounce_or_auto_reply`, and `unclear`.
+
+Lead workflow statuses are `new`, `scored`, `drafted`, `approved`, `queued`, `sent`,
+`replied_positive`, `meeting_requested`, `asked_for_more_info`, `referred`, `not_now`,
+`not_interested`, `suppressed`, `unmatched_reply`, `manual_review`, and `failed`.
+
+- Positive interest moves to `next_sales_step`; meeting requests move to `meeting_requested`.
+- More-info replies create a review-only reply draft and admin next action. Nothing auto-sends.
+- Referrals create a potential lead when a valid, unsuppressed email address is present.
+- `not_now` becomes `nurture_later`; no automatic follow-up is scheduled.
+- Opt-outs and not-interested replies become do-not-contact; hard bounces are suppressed.
+- Out-of-office/automated replies take no action; unclear replies move to manual review.
+
+When `REPLY_BASED_OPT_OUT_ENABLED=true`, direct phrases such as “no”, “not interested”, “remove me”,
+“stop”, and “don’t contact me” are suppressed deterministically before AI. Suppression reasons retain
+`remove_me`, `not_interested`, `complaint`, and `hard_bounce` categories.
+
+## n8n role
+
+n8n imports leads from Sheets/forms/CSV, monitors the Zoho inbox, posts replies to the Worker,
+notifies the team about positive replies, and can sync warm leads to a CRM. It must not send cold
+emails, bypass approval/suppression, own lead state, or own sending limits.
+
+Import the workflows in `n8n/`. Lead intake uses `Authorization: Bearer <API_KEY>`; reply ingest uses
+`x-n8n-webhook-secret: <N8N_WEBHOOK_SECRET>`. Configure Zoho and team alerts, then replace the
+workflow placeholders. See `n8n/README.md` for polling, retry, processed-message, and test steps.
 
 ## Setup
 
-Prereqs: Node ≥ 20, pnpm, a Cloudflare account (free plan works), Zoho Mail admin
-access, and an n8n instance (only needed for intake/replies — the core works without it).
+Prerequisites: Node 20+, pnpm, Cloudflare, Zoho Mail admin access, and optionally n8n.
 
 ```powershell
 pnpm install
-
-# 1. Cloudflare resources
 wrangler login
-wrangler d1 create outreach-db          # paste database_id into wrangler.jsonc
+wrangler d1 create outreach-db
 wrangler queues create outreach-send
 wrangler queues create outreach-send-dlq
 
-# 2. AI Gateway (dashboard → AI → AI Gateway → Create): name it `outreach`
-#    (or change AI_GATEWAY_ID). Create an API token with permissions
-#    Account → Workers AI → Read + Edit. `wrangler whoami` shows the account id
-#    for CF_ACCOUNT_ID in wrangler.jsonc.
-
-# 3. Zoho OAuth - follow docs/zoho-oauth-setup.md, then set ZOHO_ACCOUNT_ID in wrangler.jsonc.
-
-# 4. Secrets
-wrangler secret put API_KEY             # long random string; used by dashboard + n8n
+wrangler secret put API_KEY
 wrangler secret put CF_AI_TOKEN
 wrangler secret put ZOHO_CLIENT_ID
 wrangler secret put ZOHO_CLIENT_SECRET
 wrangler secret put ZOHO_REFRESH_TOKEN
-wrangler secret put UNSUB_SECRET        # e.g. openssl rand -hex 32
+wrangler secret put N8N_WEBHOOK_SECRET
+wrangler secret put UNSUB_SECRET
 
-# 5. Fill remaining vars in wrangler.jsonc:
-#    FROM_NAME (how you sign emails), PHYSICAL_ADDRESS (footer), PUBLIC_BASE_URL
-#    (the worker's URL - update after first deploy), DAILY_SEND_CAP (start 10).
-
-# 6. Database + deploy
 pnpm db:migrate:remote
 pnpm deploy
 ```
 
-Open `<PUBLIC_BASE_URL>/admin`, enter the API key, add a test lead (your own address),
-Score → Draft → review → Send now.
+Set the Cloudflare resource IDs and non-secret vars in `wrangler.jsonc`. Follow
+`docs/zoho-oauth-setup.md` for Zoho OAuth. Open `<PUBLIC_BASE_URL>/admin`, enter the API key,
+and test with an address you control.
 
-### n8n
-
-Import the three files in `n8n/`. Create credentials: **Outreach API** (Header Auth:
-name `Authorization`, value `Bearer <API_KEY>`), **Zoho IMAP** (see
-`docs/zoho-oauth-setup.md` §5), **Telegram Bot**. Replace `OUTREACH_BASE_URL` and
-`TELEGRAM_CHAT_ID` placeholders inside the workflows, then activate.
-
-## Local development
+## Local development and verification
 
 ```powershell
-Copy-Item .dev.vars.example .dev.vars   # then edit
+Copy-Item .dev.vars.example .dev.vars
 pnpm db:migrate:local
-pnpm dev                                # http://127.0.0.1:8788/admin
+pnpm test
+pnpm check
+pnpm dev
 ```
 
-`.dev.vars.example` defaults to `DRY_RUN=true`: the full pipeline runs (including queue
-consumer and crons) but `sendMail` logs instead of emailing — safe end-to-end testing.
-Real AI calls need a real `CF_AI_TOKEN` even locally (Workers AI is a REST call).
-Trigger crons locally: `curl "http://127.0.0.1:8788/cdn-cgi/handler/scheduled?cron=*/15+*+*+*+*"`
-(wrangler dev exposes scheduled handlers; alternatively POST /api/pipeline/advance).
+Use `DRY_RUN=true` locally to exercise the full pipeline without sending real mail. Real AI calls
+still need `CF_AI_TOKEN`.
 
-## API (all `/api/*` need `Authorization: Bearer <API_KEY>`)
+## API
+
+All admin/API routes require `Authorization: Bearer <API_KEY>` unless marked public. The dedicated
+n8n endpoint uses `x-n8n-webhook-secret` instead.
 
 | Endpoint | Purpose |
 |---|---|
-| `POST /api/leads` | Batch intake `{leads:[{email, firstName?, lastName?, role?, company?, companyWebsite?, industry?, source?, notes?}]}` → per-row `inserted\|duplicate_email\|suppressed\|invalid` |
-| `GET /api/leads?status=&segment=&q=&limit=&offset=` | Pipeline list |
-| `GET /api/leads/:id` · `PATCH /api/leads/:id` | Detail (+messages/events/footer) · notes / `{action:'disqualify'\|'reactivate'}` |
-| `POST /api/leads/:id/score` · `POST /api/leads/:id/draft` | Manual AI triggers (`{force:true}` overrides one-email rule) |
-| `POST /api/pipeline/advance` | Run scoring+drafting batches now |
-| `GET /api/messages?status=draft` | Review queue |
-| `PATCH /api/messages/:id` | Edit draft |
-| `POST /api/messages/:id/approve` / `reject` / `send-now` | Review actions |
-| `POST /api/replies` | Reply ingest (n8n) → returns classification for alert routing |
-| `GET /api/replies?classification=` | Replies list |
-| `GET /api/stats` | Dashboard/digest numbers |
-| `GET/POST/DELETE /api/suppression` | Opt-out list management |
-| `GET /unsubscribe?l=&t=` | **Public** one-click opt-out (HMAC token) |
-| `GET /health` | **Public** liveness |
+| `POST /api/leads` | Batch lead intake |
+| `GET /api/leads` · `GET/PATCH /api/leads/:id` | Pipeline list and lead detail/actions |
+| `POST /api/leads/:id/score` · `POST /api/leads/:id/draft` | Manual AI actions |
+| `POST /api/pipeline/advance` | Run bounded score/draft batches |
+| `GET /api/messages?status=review` | Human review queue, including `needs_review` |
+| `PATCH /api/messages/:id` | Normalize and save an edited draft |
+| `POST /api/messages/:id/approve` · `reject` · `send-now` | Human review actions |
+| `POST /replies/ingest` | n8n reply ingest; dedicated webhook-secret auth |
+| `GET /api/replies` | Stored matched and unmatched replies |
+| `GET /admin/replies/debug` · `GET /api/admin/replies/debug` | Recent ingest, matching, classification, and errors |
+| `GET /api/admin/ai/models` · `POST /api/admin/ai/model` | Read/select the active AI model |
+| `GET /admin/ai/models` · `POST /admin/ai/model` | Exact non-API aliases for model settings |
+| `GET/POST/DELETE /api/suppression` | Suppression management |
+| `GET /unsubscribe?l=&t=` | Public signed HMAC opt-out endpoint; not visible by default |
+| `GET /health` | Public liveness check |
 
-## Compliance & deliverability (read before the first real batch)
+## Operations
 
-- **Consent hygiene**: every email carries Centrisec's identity, a physical address,
-  and a working unsubscribe link. Opt-outs, "remove me" replies, and bounces are
-  suppressed immediately and permanently. `lead_events` is the audit trail. This is
-  designed for NDPA-2023-conscious, CAN-SPAM-style B2B outreach: business addresses,
-  relevant messaging, low volume.
-- **Warm-up**: keep `DAILY_SEND_CAP=10` for the first ~2 weeks, then raise to 20.
-  High relevance + low volume is the whole strategy.
-- **DNS**: centrisec.com already sends via Zoho, so SPF/DKIM should exist. Verify
-  DMARC before the first batch: `Resolve-DnsName -Type TXT _dmarc.centrisec.com`.
-- **Zoho limits**: the Mail API has per-plan daily limits (hundreds/day — far above the
-  cap here). Keep cold volume conservative; the value is in relevance, not reach.
-
-## Operations notes
-
-- **D1 is the source of truth; the queue is only a delivery kick.** Consumers re-check
-  every gate at send time; a conditional `queued→sending` claim makes double-sends
-  impossible; a 15-minute sweeper cron recovers stuck/lost work.
-- **`send_unknown`** (yellow warning in the dashboard): a send crashed mid-flight and
-  the outcome is unknown. Check the Zoho Sent folder, then either mark it resolved by
-  suppressing/disqualifying, or reject-and-redraft. It is never retried automatically.
-- **Queue fallback**: if Queues ever misbehaves, the sweeper + `send-now` path can run
-  the whole flow without it (cron-drained outbox) — see `src/schedule.ts`.
-- **Cost**: Workers AI at this volume is pennies; watch usage in the AI Gateway
-  dashboard (gateway id `outreach`).
+- D1 is the source of truth; queue delivery is idempotent and re-checks every safety gate.
+- `send_unknown` is never retried automatically. Confirm the Zoho Sent folder manually.
+- A 15-minute sweeper recovers approved/queued work without bypassing controls.
+- Keep initial volume conservative (`DAILY_SEND_CAP=10`) and verify SPF, DKIM, and DMARC.

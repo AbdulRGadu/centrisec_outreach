@@ -9,8 +9,9 @@ export interface Env {
   // Vars (wrangler.jsonc)
   CF_ACCOUNT_ID: string;
   AI_GATEWAY_ID: string;
-  MODEL_STRONG: string;
-  MODEL_FAST: string;
+  AI_PROVIDER: string;
+  DEFAULT_AI_MODEL: string;
+  AVAILABLE_AI_MODELS: string;
   ZOHO_MAIL_BASE: string;
   ZOHO_ACCOUNTS_BASE: string;
   ZOHO_ACCOUNT_ID: string;
@@ -27,6 +28,8 @@ export interface Env {
   DRAFT_BATCH: string;
   FIT_THRESHOLD: string;
   DRY_RUN: string;
+  VISIBLE_UNSUBSCRIBE_URL_ENABLED: string;
+  REPLY_BASED_OPT_OUT_ENABLED: string;
 
   // Secrets (wrangler secret / .dev.vars)
   API_KEY: string;
@@ -34,6 +37,7 @@ export interface Env {
   ZOHO_CLIENT_ID: string;
   ZOHO_CLIENT_SECRET: string;
   ZOHO_REFRESH_TOKEN: string;
+  N8N_WEBHOOK_SECRET: string;
   UNSUB_SECRET: string;
 }
 

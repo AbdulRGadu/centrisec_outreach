@@ -92,6 +92,8 @@ function classifyStatus(status: number, zohoCode: string | number | undefined): 
 
 export interface SendMailResult {
   dryRun: boolean;
+  providerMessageId: string | null;
+  internetMessageId: string | null;
 }
 
 /**
@@ -106,7 +108,7 @@ export async function sendMail(
   if (isDryRun(env)) {
     const domain = args.to.slice(args.to.lastIndexOf('@'));
     console.log(`[dry-run] would send email to=***${domain} subject-length=${args.subject.length}`);
-    return { dryRun: true };
+    return { dryRun: true, providerMessageId: null, internetMessageId: null };
   }
 
   const token = await getAccessToken(env);
@@ -131,7 +133,16 @@ export async function sendMail(
     throw new ZohoError('transient', 0, `Zoho network error: ${err instanceof Error ? err.message : String(err)}`);
   }
 
-  if (res.ok) return { dryRun: false };
+  if (res.ok) {
+    const json = (await res.json().catch(() => null)) as
+      | { data?: { messageId?: string | number; mailId?: string } }
+      | null;
+    return {
+      dryRun: false,
+      providerMessageId: json?.data?.messageId ? String(json.data.messageId) : null,
+      internetMessageId: json?.data?.mailId ? String(json.data.mailId) : null,
+    };
+  }
 
   const json = (await res.json().catch(() => null)) as
     | { status?: { code?: number | string; description?: string }; data?: { errorCode?: string } }

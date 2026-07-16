@@ -20,6 +20,9 @@
   button.primary { background: var(--accent); border-color: var(--accent); color: #04110b; font-weight: 600; }
   button.danger { border-color: #7f1d1d; color: #fca5a5; }
   button:disabled { opacity: .5; cursor: wait; }
+  .spinner { width: 13px; height: 13px; display: inline-block; border: 2px solid currentColor;
+    border-right-color: transparent; border-radius: 50%; animation: spin .7s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
   input, select, textarea { font: inherit; background: var(--panel-2); color: var(--text);
     border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; }
   input:focus, select:focus, textarea:focus { outline: none; border-color: var(--accent); }
@@ -68,12 +71,13 @@
     border: 1px solid var(--line); color: var(--muted); white-space: nowrap; }
   .st-new { color: var(--info); border-color: var(--info); }
   .st-scored, .st-drafted { color: var(--accent-2); border-color: var(--accent-2); }
-  .st-approved, .st-queued, .st-sending { color: var(--warn); border-color: var(--warn); }
+  .st-approved, .st-queued, .st-sending, .st-needs_review { color: var(--warn); border-color: var(--warn); }
   .st-sent { color: var(--text); }
-  .st-replied, .cl-interested, .cl-wants_demo, .cl-more_info, .cl-referral
+  .st-replied_positive, .st-meeting_requested, .st-asked_for_more_info, .st-referred,
+  .cl-positive_interest, .cl-meeting_request, .cl-asks_for_more_info, .cl-referral_to_colleague
     { color: var(--accent); border-color: var(--accent); font-weight: 600; }
-  .st-bounced, .st-unsubscribed, .st-disqualified, .st-failed, .st-rejected,
-  .cl-remove_me, .cl-not_interested, .cl-bounce { color: var(--bad); border-color: var(--bad); }
+  .st-suppressed, .st-not_interested, .st-failed, .st-rejected,
+  .cl-remove_me, .cl-not_interested, .cl-bounce_or_auto_reply { color: var(--bad); border-color: var(--bad); }
   .st-send_unknown { color: var(--warn); border-color: var(--warn); font-weight: 700; }
   .cl-not_now, .cl-out_of_office, .cl-unclear { color: var(--muted); }
 
@@ -102,6 +106,10 @@
   #toast.bad { border-color: var(--bad); }
   #toast.show { opacity: 1; }
   .empty { color: var(--muted); text-align: center; padding: 32px 0; }
+  .feedback { min-height: 21px; margin: 8px 0 0; color: var(--info); }
+  .feedback.success { color: var(--accent-2); }
+  .feedback.bad, .warning { color: var(--warn); }
+  .warning { border-left: 3px solid var(--warn); padding: 7px 10px; background: rgba(245,158,11,.08); }
 </style>
 </head>
 <body>
@@ -129,6 +137,7 @@
       <button data-tab="replies">Replies</button>
       <button data-tab="suppression">Suppression</button>
       <button data-tab="add">Add lead</button>
+      <button data-tab="settings">Settings</button>
     </nav>
   </header>
   <main>
@@ -173,7 +182,19 @@
         </select>
         <button id="replies-refresh" class="primary">Filter</button>
       </div>
+      <h2>Next Step</h2>
+      <p class="muted small">Positive replies stay human-controlled. No reply is sent automatically.</p>
+      <div id="next-steps"></div>
+      <h2>All replies</h2>
       <div id="replies-list"></div>
+      <details class="card" style="margin-top:12px">
+        <summary>Reply ingestion debug</summary>
+        <div class="row" style="margin-top:10px">
+          <button id="reply-debug-refresh">Refresh debug log</button>
+          <span id="reply-debug-summary" class="muted small"></span>
+        </div>
+        <pre id="reply-debug-output">Refresh to inspect recent n8n ingests.</pre>
+      </details>
     </section>
 
     <section id="tab-suppression" class="hidden">
@@ -215,6 +236,19 @@
         </div>
       </div>
     </section>
+
+    <section id="tab-settings" class="hidden">
+      <div class="card" style="max-width:720px">
+        <h2 style="margin-top:0">AI model</h2>
+        <p class="muted">The active model is used for lead scoring, email drafting, and reply classification.</p>
+        <div class="row">
+          <select id="ai-model" class="grow" aria-label="Active AI model"></select>
+          <button id="ai-model-save" class="primary">Save model</button>
+        </div>
+        <p id="ai-model-meta" class="muted small"></p>
+        <p id="ai-model-feedback" class="feedback" aria-live="polite"></p>
+      </div>
+    </section>
   </main>
 </div>
 
@@ -233,9 +267,9 @@
 <script>
 'use strict';
 
-const LEAD_STATUSES = ['new','scored','drafted','approved','queued','sent','replied','bounced','unsubscribed','disqualified'];
+const LEAD_STATUSES = ['new','scored','drafted','approved','queued','sent','replied_positive','meeting_requested','asked_for_more_info','referred','not_now','not_interested','suppressed','unmatched_reply','manual_review','failed'];
 const SEGMENTS = ['fintech','healthcare','school','logistics','saas','enterprise','sme','other'];
-const CLASSIFICATIONS = ['interested','wants_demo','more_info','referral','not_now','not_interested','remove_me','out_of_office','bounce','unclear'];
+const CLASSIFICATIONS = ['positive_interest','meeting_request','asks_for_more_info','referral_to_colleague','not_now','not_interested','remove_me','out_of_office','bounce_or_auto_reply','unclear'];
 
 const state = {
   token: localStorage.getItem('outreach_token') || '',
@@ -243,6 +277,7 @@ const state = {
   page: 0,
   pageSize: 50,
   total: 0,
+  drafting: new Set(),
 };
 
 const $ = (sel) => document.querySelector(sel);
@@ -302,6 +337,12 @@ function chip(value, prefix) {
   return el('span', { class: 'chip ' + prefix + String(value || '') }, String(value || '—'));
 }
 
+function draftButton(id) {
+  const btn = el('button', { 'data-draft-id': id }, 'Draft mail');
+  btn.addEventListener('click', () => draftLead(id));
+  return btn;
+}
+
 function closeLayer(which) {
   $('#' + which + '-wrap').classList.add('hidden');
 }
@@ -320,7 +361,8 @@ async function refreshStats() {
       el('span', { class: 'stat' }, 'Sends today ', el('b', {}, s.sendsToday + ' / ' + s.dailyCap)),
       el('span', { class: 'stat' }, 'Awaiting approval ', el('b', {}, s.draftsAwaiting)),
       el('span', { class: 'stat' }, 'New ', el('b', {}, s.pipeline.new), ' · Scored ', el('b', {}, s.pipeline.scored),
-        ' · Sent ', el('b', {}, s.pipeline.sent), ' · Replied ', el('b', {}, s.pipeline.replied)),
+        ' · Sent ', el('b', {}, s.pipeline.sent), ' · Positive ', el('b', {},
+          (s.pipeline.replied_positive || 0) + (s.pipeline.meeting_requested || 0) + (s.pipeline.asked_for_more_info || 0))),
     ];
     if (s.sendUnknown > 0) {
       chips.push(el('span', { class: 'stat warn' }, '⚠ ' + s.sendUnknown + ' send(s) need manual review'));
@@ -374,13 +416,13 @@ async function openLead(id) {
   if (['new', 'scored'].includes(l.status)) {
     actions.push(el('button', { onclick: () => leadAction('Scoring…', () => api('/leads/' + id + '/score', { method: 'POST' }), id) }, l.fit_score === null ? 'Score now' : 'Re-score'));
   }
-  if (!['unsubscribed', 'bounced', 'disqualified'].includes(l.status)) {
-    actions.push(el('button', { onclick: () => draftLead(id) }, 'Draft email'));
+  if (!['suppressed', 'failed', 'not_interested'].includes(l.status)) {
+    actions.push(draftButton(id));
   }
-  if (['sent', 'replied', 'disqualified'].includes(l.status)) {
+  if (['sent', 'replied_positive', 'meeting_requested', 'asked_for_more_info', 'referred', 'not_now', 'not_interested', 'manual_review', 'failed'].includes(l.status)) {
     actions.push(el('button', { onclick: () => leadAction('Reactivating…', () => api('/leads/' + id, { method: 'PATCH', body: { action: 'reactivate' } }), id) }, 'Reactivate'));
   }
-  if (!['disqualified', 'unsubscribed'].includes(l.status)) {
+  if (!['not_interested', 'suppressed'].includes(l.status)) {
     actions.push(el('button', { class: 'danger', onclick: () => {
       if (confirm('Disqualify this lead?')) leadAction('Disqualifying…', () => api('/leads/' + id, { method: 'PATCH', body: { action: 'disqualify' } }), id);
     } }, 'Disqualify'));
@@ -406,6 +448,7 @@ async function openLead(id) {
       el('div', {}, 'Source'), el('div', {}, l.source),
       el('div', {}, 'Created'), el('div', {}, fmtDate(l.created_at))),
     el('div', { class: 'row' }, ...actions),
+    el('p', { id: 'draft-feedback-' + id, class: 'feedback', 'aria-live': 'polite' }),
     el('h3', {}, 'Notes'),
     notes,
     el('div', { class: 'row', style: 'margin-top:6px' },
@@ -423,7 +466,7 @@ async function openLead(id) {
           el('span', { class: 'muted small', style: 'margin-left:auto' }, fmtDate(m.created_at))),
         m.subject ? el('div', { class: 'small', style: 'margin-top:4px' }, el('b', {}, m.subject)) : null,
         el('details', {}, el('summary', { class: 'muted small' }, 'Body'), el('pre', {}, m.body || '')),
-        m.status === 'draft' ? el('div', { class: 'row', style: 'margin-top:6px' },
+        ['draft','needs_review'].includes(m.status) ? el('div', { class: 'row', style: 'margin-top:6px' },
           el('button', { class: 'primary', onclick: () => { closeLayer('drawer'); openDraft(m.id); } }, 'Review draft')) : null,
         m.error ? el('div', { class: 'small', style: 'color:var(--bad);margin-top:4px' }, m.error) : null))),
     el('h3', {}, 'Timeline'),
@@ -452,29 +495,77 @@ async function leadAction(label, fn, reopenId) {
 }
 
 async function draftLead(id) {
+  if (state.drafting.has(id)) return;
+  state.drafting.add(id);
+  const buttons = () => document.querySelectorAll('[data-draft-id="' + id + '"]');
+  const feedback = () => document.getElementById('draft-feedback-' + id);
+  const stages = ['Scoring lead…', 'Generating personalized email…', 'Reviewing draft quality…'];
+  let stage = 0;
+  const showStage = () => {
+    const message = stages[Math.min(stage, stages.length - 1)];
+    stage = Math.min(stage + 1, stages.length - 1);
+    buttons().forEach((btn) => {
+      btn.disabled = true;
+      btn.replaceChildren(el('span', { class: 'spinner' }), message);
+    });
+    if (feedback()) {
+      feedback().className = 'feedback';
+      feedback().textContent = message;
+    }
+  };
+  showStage();
+  const timer = setInterval(showStage, 1400);
   try {
-    toast('Drafting…');
-    await api('/leads/' + id + '/draft', { method: 'POST', body: {} });
-    toast('Draft created');
+    const result = await api('/leads/' + id + '/draft', { method: 'POST', body: {} });
+    toast('Draft generated successfully.');
     await Promise.all([loadLeads(), refreshStats()]);
     await openLead(id);
+    if (feedback()) {
+      feedback().className = result.message.status === 'needs_review' ? 'feedback bad' : 'feedback success';
+      feedback().textContent = result.message.status === 'needs_review'
+        ? 'Draft generated with validation warnings: ' + (result.message.error || 'Needs review.')
+        : 'Draft generated successfully.';
+    }
   } catch (err) {
     if (/force:true/.test(err.message) && confirm(err.message + '\n\nForce a new draft?')) {
       try {
-        await api('/leads/' + id + '/draft', { method: 'POST', body: { force: true } });
-        toast('Draft created');
+        const result = await api('/leads/' + id + '/draft', { method: 'POST', body: { force: true } });
+        toast('Draft generated successfully.');
         await openLead(id);
-      } catch (err2) { toast(err2.message, true); }
+        if (feedback()) {
+          feedback().className = result.message.status === 'needs_review' ? 'feedback bad' : 'feedback success';
+          feedback().textContent = result.message.status === 'needs_review'
+            ? 'Draft generated with validation warnings: ' + (result.message.error || 'Needs review.')
+            : 'Draft generated successfully.';
+        }
+      } catch (err2) {
+        toast('Draft failed. Please try again.', true);
+        if (feedback()) {
+          feedback().className = 'feedback bad';
+          feedback().textContent = 'Draft failed. Please try again. ' + err2.message;
+        }
+      }
     } else {
-      toast(err.message, true);
+      toast('Draft failed. Please try again.', true);
+      if (feedback()) {
+        feedback().className = 'feedback bad';
+        feedback().textContent = 'Draft failed. Please try again. ' + err.message;
+      }
     }
+  } finally {
+    clearInterval(timer);
+    state.drafting.delete(id);
+    buttons().forEach((btn) => {
+      btn.disabled = false;
+      btn.replaceChildren('Draft mail');
+    });
   }
 }
 
 /* ---------- Drafts tab ---------- */
 
 async function loadDrafts() {
-  const data = await api('/messages?status=draft');
+  const data = await api('/messages?status=review');
   const list = $('#drafts-list');
   if (data.messages.length === 0) {
     list.replaceChildren(el('p', { class: 'empty' }, 'No drafts awaiting approval.'));
@@ -485,17 +576,19 @@ async function loadDrafts() {
       el('b', {}, m.lead_company || m.lead_email || m.to_email || ''),
       m.lead_segment ? chip(m.lead_segment, 'seg-') : null,
       m.lead_fit_score !== null && m.lead_fit_score !== undefined ? el('span', { class: 'chip' }, 'fit ' + m.lead_fit_score) : null,
+      chip(m.status, 'st-'),
       el('span', { class: 'muted small', style: 'margin-left:auto' }, fmtDate(m.updated_at))),
     el('div', { class: 'small muted' }, 'To: ' + (m.to_email || '')),
     el('div', { style: 'margin:6px 0 2px' }, el('b', {}, m.subject || '(no subject)')),
     el('div', { class: 'muted small' }, String(m.body || '').slice(0, 180) + (String(m.body || '').length > 180 ? '…' : '')),
+    m.error ? el('p', { class: 'warning small' }, m.error) : null,
     el('div', { class: 'row', style: 'margin-top:10px' },
       el('button', { class: 'primary', onclick: () => openDraft(m.id) }, 'Review'))
   )));
 }
 
 async function openDraft(messageId) {
-  const data = await api('/messages?status=draft&limit=200');
+  const data = await api('/messages?status=review&limit=200');
   const m = data.messages.find((x) => x.id === messageId);
   if (!m) { toast('Draft no longer available', true); await loadDrafts(); return; }
   let footer = '';
@@ -511,7 +604,7 @@ async function openDraft(messageId) {
   const updateCount = () => {
     const words = body.value.trim().split(/\s+/).filter(Boolean).length;
     counter.textContent = words + ' words';
-    counter.style.color = words < 120 || words > 180 ? 'var(--warn)' : 'var(--muted)';
+    counter.style.color = words > 130 ? 'var(--warn)' : 'var(--muted)';
   };
   body.addEventListener('input', updateCount);
   updateCount();
@@ -560,11 +653,12 @@ async function openDraft(messageId) {
       el('button', { onclick: () => closeLayer('modal') }, '✕')),
     el('p', { class: 'muted small', style: 'margin:6px 0 12px' },
       'To ' + (m.to_email || '') + (m.lead_company ? ' · ' + m.lead_company : '') + (m.lead_segment ? ' · ' + m.lead_segment : '')),
+    m.error ? el('p', { class: 'warning' }, m.error) : null,
     el('h3', {}, 'Subject'),
     subject,
     el('div', { class: 'row', style: 'margin:10px 0 4px' }, el('h3', { class: 'grow', style: 'margin:0' }, 'Body'), counter),
     body,
-    el('h3', {}, 'Footer (appended automatically at send)'),
+    el('h3', {}, 'Footer (appended automatically at send; reply-based opt-out)'),
     el('pre', {}, footer || '(footer preview unavailable)'),
     el('div', { class: 'row', style: 'margin-top:14px' }, approveBtn, sendBtn, saveBtn, el('span', { class: 'grow' }), rejectBtn)
   );
@@ -579,6 +673,10 @@ async function loadReplies() {
   if (cls) params.set('classification', cls);
   const data = await api('/replies?' + params.toString());
   const list = $('#replies-list');
+  const positive = data.replies.filter((r) => ['positive_interest','meeting_request','asks_for_more_info','referral_to_colleague'].includes(r.classification));
+  $('#next-steps').replaceChildren(...(positive.length
+    ? positive.map(nextStepCard)
+    : [el('p', { class: 'empty' }, 'No positive replies awaiting a next step.')]));
   if (data.replies.length === 0) {
     list.replaceChildren(el('p', { class: 'empty' }, 'No replies yet.'));
     return;
@@ -591,7 +689,11 @@ async function loadReplies() {
       el('span', { class: 'muted small', style: 'margin-left:auto' }, fmtDate(r.created_at))),
     el('div', { class: 'muted small' }, 'From: ' + (r.from_email || '') +
       (r.lead_first_name || r.lead_last_name ? ' (' + [r.lead_first_name, r.lead_last_name].filter(Boolean).join(' ') + ')' : '')),
+    el('div', { class: 'muted small' }, 'Match: ' + (r.match_status || 'unmatched') + ' · Next action: ' + (r.next_action || 'manual_review')),
     r.summary ? el('div', { style: 'margin:6px 0' }, r.summary) : null,
+    r.original_body ? el('details', {}, el('summary', { class: 'muted small' }, 'Original email'),
+      r.original_subject ? el('div', { class: 'small' }, el('b', {}, r.original_subject)) : null,
+      el('pre', {}, r.original_body)) : null,
     el('details', {}, el('summary', { class: 'muted small' }, 'Reply text'), el('pre', {}, r.body || '')),
     r.suggested_reply ? el('div', {},
       el('h3', {}, 'Suggested reply (never auto-sent)'),
@@ -603,6 +705,50 @@ async function loadReplies() {
     r.lead_id ? el('div', { class: 'row', style: 'margin-top:8px' },
       el('button', { onclick: () => openLead(r.lead_id) }, 'Open lead')) : null
   )));
+}
+
+function nextStepCard(r) {
+  const run = (label, action) => el('button', { onclick: async () => {
+    if (!r.lead_id) return;
+    await replyAction(r.lead_id, action, label);
+  } }, label);
+  return el('div', { class: 'card' },
+    el('div', { class: 'row' },
+      el('b', {}, [r.lead_first_name, r.lead_last_name].filter(Boolean).join(' ') || r.from_email || 'Unknown contact'),
+      r.lead_company ? el('span', { class: 'muted' }, r.lead_company) : null,
+      chip(r.classification, 'cl-')),
+    el('p', {}, r.summary || 'No summary available.'),
+    el('div', { class: 'kv' },
+      el('div', {}, 'Recommended action'), el('div', {}, r.next_action || 'manual_review'),
+      el('div', {}, 'Original email'), el('div', {}, r.original_subject || 'Unavailable')),
+    r.original_body ? el('details', {}, el('summary', {}, 'Read original email'), el('pre', {}, r.original_body)) : null,
+    r.suggested_reply ? el('details', {}, el('summary', {}, 'Suggested reply'), el('pre', {}, r.suggested_reply)) : null,
+    r.lead_id ? el('div', { class: 'row', style: 'margin-top:10px' },
+      run('Create demo task', 'create_demo_task'),
+      run('Draft reply', 'draft_reply'),
+      run('Mark as sales qualified', 'mark_sales_qualified'),
+      run('Add to second batch', 'add_second_batch'),
+      run('Suppress', 'suppress'),
+      run('Manual review', 'manual_review')) :
+      el('p', { class: 'warning' }, 'Unmatched reply: review manually; it was stored and not dropped.'));
+}
+
+async function replyAction(leadId, action, label) {
+  try {
+    await api('/leads/' + leadId, { method: 'PATCH', body: { action } });
+    toast(label + ' saved.');
+    await Promise.all([loadReplies(), loadLeads(), refreshStats()]);
+  } catch (err) {
+    toast(err.message, true);
+  }
+}
+
+async function loadReplyDebug() {
+  const data = await api('/admin/replies/debug');
+  $('#reply-debug-summary').textContent = data.last_n8n_payload_timestamp
+    ? 'Last payload: ' + fmtDate(data.last_n8n_payload_timestamp) + ' · ' + (data.last_match_result || 'no match result')
+    : 'No reply ingest attempts recorded.';
+  $('#reply-debug-output').textContent = JSON.stringify(data.attempts, null, 2);
 }
 
 /* ---------- Suppression tab ---------- */
@@ -628,6 +774,17 @@ async function loadSuppression() {
   )));
 }
 
+/* ---------- Settings tab ---------- */
+
+async function loadSettings() {
+  const data = await api('/admin/ai/models');
+  const select = $('#ai-model');
+  select.replaceChildren(...data.models.map((model) => el('option', { value: model }, model)));
+  select.value = data.activeModel;
+  $('#ai-model-meta').textContent =
+    'Active: ' + data.activeModel + ' · Provider: ' + data.provider + ' · Fallback: ' + data.fallbackModel;
+}
+
 /* ---------- Tabs / init ---------- */
 
 const loaders = {
@@ -636,6 +793,7 @@ const loaders = {
   replies: loadReplies,
   suppression: loadSuppression,
   add: async () => {},
+  settings: loadSettings,
 };
 
 function switchTab(tab) {
@@ -680,6 +838,7 @@ $('#page-next').addEventListener('click', () => {
 });
 $('#drafts-refresh').addEventListener('click', () => loadDrafts().catch((e) => toast(e.message, true)));
 $('#replies-refresh').addEventListener('click', () => loadReplies().catch((e) => toast(e.message, true)));
+$('#reply-debug-refresh').addEventListener('click', () => loadReplyDebug().catch((e) => toast(e.message, true)));
 $('#s-add').addEventListener('click', async () => {
   try {
     const value = $('#s-value').value.trim();
@@ -689,6 +848,24 @@ $('#s-add').addEventListener('click', async () => {
     toast('Suppressed');
     await loadSuppression();
   } catch (err) { toast(err.message, true); }
+});
+$('#ai-model-save').addEventListener('click', async () => {
+  const btn = $('#ai-model-save');
+  const feedback = $('#ai-model-feedback');
+  btn.disabled = true;
+  feedback.className = 'feedback';
+  feedback.textContent = 'Saving model…';
+  try {
+    const data = await api('/admin/ai/model', { method: 'POST', body: { model: $('#ai-model').value } });
+    await loadSettings();
+    feedback.className = 'feedback success';
+    feedback.textContent = 'Active model updated to ' + data.activeModel + '.';
+  } catch (err) {
+    feedback.className = 'feedback bad';
+    feedback.textContent = 'Model update failed. ' + err.message;
+  } finally {
+    btn.disabled = false;
+  }
 });
 $('#a-save').addEventListener('click', async () => {
   try {

@@ -2,7 +2,7 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "centrisec-outreach",
   "main": "src/index.ts",
-  "compatibility_date": "2026-07-01",
+  "compatibility_date": "2026-07-16",
   "compatibility_flags": ["nodejs_compat"],
   "observability": {
     "enabled": true
@@ -13,7 +13,7 @@
   "assets": {
     "directory": "./public",
     "binding": "ASSETS",
-    "run_worker_first": ["/api/*", "/unsubscribe", "/health"]
+    "run_worker_first": ["/api/*", "/admin/ai/*", "/admin/replies/*", "/replies/*", "/unsubscribe", "/health"]
   },
   "d1_databases": [
     {
@@ -44,8 +44,9 @@
   "vars": {
     "CF_ACCOUNT_ID": "c042400a63d2d3d81042613f4abef9c1",
     "AI_GATEWAY_ID": "outreach",
-    "MODEL_STRONG": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
-    "MODEL_FAST": "@cf/meta/llama-3.1-8b-instruct-fast",
+    "AI_PROVIDER": "cloudflare_ai_gateway",
+    "DEFAULT_AI_MODEL": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+    "AVAILABLE_AI_MODELS": "@cf/meta/llama-3.3-70b-instruct-fp8-fast,@cf/meta/llama-3.1-8b-instruct-fast",
     "ZOHO_MAIL_BASE": "https://mail.zoho.com",
     "ZOHO_ACCOUNTS_BASE": "https://accounts.zoho.com",
     "ZOHO_ACCOUNT_ID": "3635899000000008002",
@@ -61,7 +62,9 @@
     "SCORE_BATCH": "10",
     "DRAFT_BATCH": "5",
     "FIT_THRESHOLD": "40",
-    "DRY_RUN": "false"
+    "DRY_RUN": "false",
+    "VISIBLE_UNSUBSCRIBE_URL_ENABLED": "false",
+    "REPLY_BASED_OPT_OUT_ENABLED": "true"
   }
   // Secrets (set with `wrangler secret put NAME`, mirror in .dev.vars for local):
   //   API_KEY            - bearer token for the dashboard and n8n
@@ -69,5 +72,6 @@
   //   ZOHO_CLIENT_ID     - Zoho Self Client
   //   ZOHO_CLIENT_SECRET
   //   ZOHO_REFRESH_TOKEN
+  //   N8N_WEBHOOK_SECRET - shared only with the n8n reply-ingest workflow
   //   UNSUB_SECRET       - HMAC key for unsubscribe links (e.g. `openssl rand -hex 32`)
 }

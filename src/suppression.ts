@@ -72,9 +72,9 @@ export async function handleUnsubscribe(request: Request, env: Env): Promise<Res
   if (!lead) return notFound();
 
   await addSuppression(env.DB, 'email', lead.email, 'unsubscribe');
-  if (lead.status !== 'unsubscribed') {
+  if (lead.status !== 'suppressed') {
     await env.DB
-      .prepare(`UPDATE leads SET status = 'unsubscribed', updated_at = datetime('now') WHERE id = ?1`)
+      .prepare(`UPDATE leads SET status = 'suppressed', updated_at = datetime('now') WHERE id = ?1`)
       .bind(leadId)
       .run();
     await recordEvent(env.DB, leadId, 'unsubscribed');
@@ -116,9 +116,9 @@ export async function handleSuppressionAdd(body: Record<string, unknown>, env: E
   // Reflect immediately on any matching lead so it can't be drafted/approved.
   await env.DB
     .prepare(
-      `UPDATE leads SET status = 'disqualified', updated_at = datetime('now')
+      `UPDATE leads SET status = 'suppressed', updated_at = datetime('now')
        WHERE ${kind === 'email' ? 'email' : 'domain'} = ?1
-         AND status NOT IN ('unsubscribed','disqualified','bounced')`
+         AND status != 'suppressed'`
     )
     .bind(cleaned)
     .run();

@@ -1,4 +1,5 @@
 import { AiError } from './ai/client';
+import { handleAiModelPost, handleAiModelsGet } from './ai/settings';
 import { isAuthorized } from './auth';
 import type { Env } from './env';
 import { HttpError, jsonResponse, readJson } from './http';
@@ -11,7 +12,12 @@ import {
   handleSendNow,
 } from './messages';
 import { advancePipeline, draftLead, scoreLead } from './pipeline';
-import { handleRepliesList, handleReplyPost } from './replies';
+import {
+  handleRepliesDebug,
+  handleRepliesList,
+  handleReplyIngest,
+  handleReplyPost,
+} from './replies';
 import { runScheduled } from './schedule';
 import { processSend } from './sending';
 import { handleStats } from './stats';
@@ -85,6 +91,15 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
 
   if (resource === 'stats' && !id && method === 'GET') return handleStats(env);
 
+  if (resource === 'admin' && id === 'ai') {
+    if (action === 'models' && method === 'GET') return handleAiModelsGet(env);
+    if (action === 'model' && method === 'POST') return handleAiModelPost(await readJson(request), env);
+  }
+
+  if (resource === 'admin' && id === 'replies' && action === 'debug' && method === 'GET') {
+    return handleRepliesDebug(env);
+  }
+
   if (resource === 'suppression') {
     if (!id && method === 'GET') return handleSuppressionList(env);
     if (!id && method === 'POST') return handleSuppressionAdd(await readJson(request), env);
@@ -103,6 +118,27 @@ export default {
       }
       if (url.pathname === '/unsubscribe') {
         return await handleUnsubscribe(request, env);
+      }
+      if (url.pathname === '/replies/ingest') {
+        if (request.method !== 'POST') throw new HttpError(405, 'Method not allowed');
+        return await handleReplyIngest(request, env);
+      }
+      if (url.pathname === '/admin/replies/debug') {
+        if (!(await isAuthorized(request, env))) {
+          return jsonResponse({ ok: false, error: 'Unauthorized' }, 401);
+        }
+        if (request.method !== 'GET') throw new HttpError(405, 'Method not allowed');
+        return handleRepliesDebug(env);
+      }
+      if (url.pathname === '/admin/ai/models' || url.pathname === '/admin/ai/model') {
+        if (!(await isAuthorized(request, env))) {
+          return jsonResponse({ ok: false, error: 'Unauthorized' }, 401);
+        }
+        if (url.pathname.endsWith('/models') && request.method === 'GET') return handleAiModelsGet(env);
+        if (url.pathname.endsWith('/model') && request.method === 'POST') {
+          return handleAiModelPost(await readJson(request), env);
+        }
+        throw new HttpError(405, 'Method not allowed');
       }
       if (url.pathname === '/api' || url.pathname.startsWith('/api/')) {
         if (!(await isAuthorized(request, env))) {

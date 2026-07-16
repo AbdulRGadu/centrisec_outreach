@@ -9,10 +9,16 @@ const LEAD_STATUSES = [
   'approved',
   'queued',
   'sent',
-  'replied',
-  'bounced',
-  'unsubscribed',
-  'disqualified',
+  'replied_positive',
+  'meeting_requested',
+  'asked_for_more_info',
+  'referred',
+  'not_now',
+  'not_interested',
+  'suppressed',
+  'unmatched_reply',
+  'manual_review',
+  'failed',
 ] as const;
 
 export async function handleStats(env: Env): Promise<Response> {
@@ -30,7 +36,7 @@ export async function handleStats(env: Env): Promise<Response> {
     .first<{ count: number }>();
 
   const drafts = await env.DB
-    .prepare(`SELECT COUNT(*) AS n FROM messages WHERE direction = 'outbound' AND status = 'draft'`)
+    .prepare(`SELECT COUNT(*) AS n FROM messages WHERE direction = 'outbound' AND status IN ('draft','needs_review')`)
     .first<{ n: number }>();
 
   const sendUnknown = await env.DB

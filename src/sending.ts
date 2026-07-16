@@ -3,7 +3,7 @@ import { intVar, type Env } from './env';
 import { addSuppression, isSuppressed, unsubTokenFor } from './suppression';
 import type { LeadRow, MessageRow } from './types';
 import { dayString, isInSendWindow, secondsToNextWindowOpen, weekStartString } from './util/time';
-import { ensureFooter, unsubscribeUrl } from './util/text';
+import { ensureFooter, unsubscribeUrl, visibleUnsubscribeUrlEnabled } from './util/text';
 import { getAccessToken, sendMail, ZohoError } from './zoho';
 
 export type SendOutcome =
@@ -117,7 +117,7 @@ export async function processSend(env: Env, messageId: string): Promise<SendOutc
   const suppressedReason = await isSuppressed(env.DB, lead.email, lead.domain);
   if (suppressedReason) {
     await markFailed(env, messageId, `suppressed: ${suppressedReason}`);
-    const leadStatus = suppressedReason === 'unsubscribe' ? 'unsubscribed' : 'disqualified';
+    const leadStatus = 'suppressed';
     await env.DB
       .prepare(`UPDATE leads SET status = ?1, updated_at = datetime('now') WHERE id = ?2`)
       .bind(leadStatus, lead.id)
@@ -181,20 +181,25 @@ export async function processSend(env: Env, messageId: string): Promise<SendOutc
     return { action: 'ack', reason: 'claimed elsewhere' };
   }
 
-  // Compliance footer: identity + physical address + working opt-out link.
-  const token = await unsubTokenFor(env, lead.id);
-  const finalBody = ensureFooter(env, message.body ?? '', unsubscribeUrl(env, lead.id, token));
+  // The visible footer uses reply-based opt-out by default. The signed URL remains
+  // available internally and can be explicitly enabled through Worker config.
+  let visibleUrl: string | undefined;
+  if (visibleUnsubscribeUrlEnabled(env)) {
+    const token = await unsubTokenFor(env, lead.id);
+    visibleUrl = unsubscribeUrl(env, lead.id, token);
+  }
+  const finalBody = ensureFooter(env, message.body ?? '', visibleUrl);
   const subject = message.subject ?? 'Centrisec';
 
   try {
     const sent = await trySendWithAuthRetry(env, lead.email, subject, finalBody);
     await env.DB
       .prepare(
-        `UPDATE messages SET status = 'sent', body = ?1, error = NULL,
+        `UPDATE messages SET status = 'sent', body = ?1, zoho_message_id = COALESCE(?2, zoho_message_id), error = NULL,
            sent_at = datetime('now'), updated_at = datetime('now')
-         WHERE id = ?2 AND status = 'sending'`
+         WHERE id = ?3 AND status = 'sending'`
       )
-      .bind(finalBody, messageId)
+      .bind(finalBody, sent.internetMessageId ?? sent.providerMessageId, messageId)
       .run();
     await env.DB
       .prepare(`UPDATE leads SET status = 'sent', updated_at = datetime('now') WHERE id = ?1`)
@@ -206,10 +211,10 @@ export async function processSend(env: Env, messageId: string): Promise<SendOutc
     if (err instanceof ZohoError && err.kind === 'permanent') {
       await markFailed(env, messageId, err.message);
       await env.DB
-        .prepare(`UPDATE leads SET status = 'bounced', updated_at = datetime('now') WHERE id = ?1`)
+        .prepare(`UPDATE leads SET status = 'failed', updated_at = datetime('now') WHERE id = ?1`)
         .bind(lead.id)
         .run();
-      await addSuppression(env.DB, 'email', lead.email, 'bounce', messageId);
+      await addSuppression(env.DB, 'email', lead.email, 'hard_bounce', messageId);
       await decrementCounter(env, day);
       await decrementDomainCounter(env, weekStart, lead.domain);
       await recordEvent(env.DB, lead.id, 'send_failed', { message_id: messageId, kind: 'permanent' });
@@ -231,7 +236,7 @@ async function trySendWithAuthRetry(
   to: string,
   subject: string,
   content: string
-): Promise<{ dryRun: boolean }> {
+): Promise<{ dryRun: boolean; providerMessageId: string | null; internetMessageId: string | null }> {
   try {
     return await sendMail(env, { to, subject, content });
   } catch (err) {

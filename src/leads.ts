@@ -1,9 +1,9 @@
 import { inPlaceholders, recordEvent, recordEventStmt } from './db';
 import type { Env } from './env';
 import { HttpError, isValidEmail, jsonResponse, normalizeMultiline, normalizeText } from './http';
-import { loadSuppressedKeys, suppressionKeyHit, unsubTokenFor } from './suppression';
+import { addSuppression, loadSuppressedKeys, suppressionKeyHit, unsubTokenFor } from './suppression';
 import type { LeadRow, MessageRow } from './types';
-import { buildFooter, domainOf, unsubscribeUrl } from './util/text';
+import { buildFooter, domainOf, unsubscribeUrl, visibleUnsubscribeUrlEnabled } from './util/text';
 
 const SOURCES = new Set(['csv', 'sheets', 'form', 'directory', 'linkedin', 'referral', 'manual']);
 
@@ -180,8 +180,12 @@ export async function handleLeadGet(id: string, env: Env): Promise<Response> {
     .prepare('SELECT event, detail, created_at FROM lead_events WHERE lead_id = ?1 ORDER BY id DESC LIMIT 100')
     .bind(id)
     .all();
-  const token = await unsubTokenFor(env, lead.id);
-  const footerPreview = buildFooter(env, unsubscribeUrl(env, lead.id, token));
+  let visibleUrl: string | undefined;
+  if (visibleUnsubscribeUrlEnabled(env)) {
+    const token = await unsubTokenFor(env, lead.id);
+    visibleUrl = unsubscribeUrl(env, lead.id, token);
+  }
+  const footerPreview = buildFooter(env, visibleUrl);
   return jsonResponse({
     ok: true,
     lead,
@@ -203,15 +207,15 @@ export async function handleLeadPatch(id: string, body: Record<string, unknown>,
 
   const action = typeof body.action === 'string' ? body.action : '';
   if (action === 'disqualify') {
-    if (lead.status === 'unsubscribed') throw new HttpError(409, 'Lead already unsubscribed');
+    if (lead.status === 'suppressed') throw new HttpError(409, 'Lead is suppressed');
     await env.DB
-      .prepare(`UPDATE leads SET status = 'disqualified', updated_at = datetime('now') WHERE id = ?1`)
+      .prepare(`UPDATE leads SET status = 'not_interested', sales_stage = 'do_not_contact', next_action = 'suppress', updated_at = datetime('now') WHERE id = ?1`)
       .bind(id)
       .run();
-    await recordEvent(env.DB, id, 'status_changed', { to: 'disqualified', by: 'manual' });
+    await recordEvent(env.DB, id, 'status_changed', { to: 'not_interested', by: 'manual' });
   } else if (action === 'reactivate') {
     // The only way a non-replier re-enters the pipeline (no automatic follow-ups).
-    if (!['sent', 'replied', 'disqualified'].includes(lead.status)) {
+    if (!['sent', 'replied_positive', 'meeting_requested', 'asked_for_more_info', 'referred', 'not_now', 'not_interested', 'manual_review', 'failed'].includes(lead.status)) {
       throw new HttpError(409, `Cannot reactivate a lead in status '${lead.status}'`);
     }
     await env.DB
@@ -219,9 +223,36 @@ export async function handleLeadPatch(id: string, body: Record<string, unknown>,
       .bind(id)
       .run();
     await recordEvent(env.DB, id, 'status_changed', { to: 'scored', by: 'manual_reactivate' });
+  } else if (action === 'create_demo_task') {
+    await updateSalesAction(env, id, 'meeting_requested', 'demo_task_created', 'ask_availability', action);
+  } else if (action === 'draft_reply') {
+    await updateSalesAction(env, id, lead.status, 'reply_draft_ready', lead.next_action ?? 'manual_review', action);
+  } else if (action === 'mark_sales_qualified') {
+    await updateSalesAction(env, id, 'replied_positive', 'sales_qualified', 'book_demo', action);
+  } else if (action === 'add_second_batch') {
+    await updateSalesAction(env, id, lead.status, 'second_batch_selected', 'manual_review', action);
+  } else if (action === 'suppress') {
+    await addSuppression(env.DB, 'email', lead.email, 'manual');
+    await updateSalesAction(env, id, 'suppressed', 'do_not_contact', 'suppress', action);
+  } else if (action === 'manual_review') {
+    await updateSalesAction(env, id, 'manual_review', 'manual_review', 'manual_review', action);
   } else if (action) {
     throw new HttpError(400, `Unknown action '${action}'`);
   }
 
   return jsonResponse({ ok: true, lead: await getLead(env, id) });
+}
+
+async function updateSalesAction(
+  env: Env,
+  leadId: string,
+  status: LeadRow['status'],
+  salesStage: string,
+  nextAction: string,
+  action: string
+): Promise<void> {
+  await env.DB.prepare(
+    `UPDATE leads SET status = ?1, sales_stage = ?2, next_action = ?3, updated_at = datetime('now') WHERE id = ?4`
+  ).bind(status, salesStage, nextAction, leadId).run();
+  await recordEvent(env.DB, leadId, 'sales_action', { action, status, sales_stage: salesStage });
 }

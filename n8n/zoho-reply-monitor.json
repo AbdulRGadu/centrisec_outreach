@@ -3,7 +3,7 @@
   "nodes": [
     {
       "parameters": {
-        "content": "## Reply monitor\n1. Credentials needed: **Zoho IMAP** (imap.zoho.com:993, SSL, app password - see docs/zoho-oauth-setup.md), **Outreach API** (Header Auth: `Authorization` = `Bearer <API_KEY>`), **Telegram Bot**.\n2. Replace `OUTREACH_BASE_URL` in the HTTP node, `SENDER_EMAIL` in the Extract node (your from-address), and the Telegram `chatId`.\n3. The Worker classifies each reply, updates the lead, handles remove-me/bounce suppression, and returns the classification - this workflow only routes alerts.\n4. Safe to retry: duplicates are detected server-side via the message id.",
+        "content": "## Reply monitor\n1. Credentials needed: **Zoho IMAP**, **n8n webhook secret** (`x-n8n-webhook-secret`), and **Telegram Bot**.\n2. Replace `OUTREACH_BASE_URL`, `SENDER_EMAIL`, and the Telegram `chatId`.\n3. Keep IMAP post-processing set to nothing. Mark read/processed only after Worker ingest succeeds; see n8n/README.md.\n4. The Worker owns matching, classification, lead state, suppression, and sending. Safe retries deduplicate by message_id.",
         "height": 300,
         "width": 400
       },
@@ -16,7 +16,7 @@
     {
       "parameters": {
         "mailbox": "INBOX",
-        "postProcessAction": "read",
+        "postProcessAction": "nothing",
         "options": {}
       },
       "id": "b2c3d4e5-0002-4000-8000-000000000002",
@@ -29,7 +29,7 @@
     {
       "parameters": {
         "mode": "runOnceForEachItem",
-        "jsCode": "const SENDER_EMAIL = 'admin@centrisec.com'; // our own from-address - change if needed\nconst j = $json;\nconst fromRaw = String(j.from || (j.metadata && j.metadata.from) || '');\nconst match = fromRaw.match(/<([^>]+)>/);\nconst fromEmail = (match ? match[1] : fromRaw).trim().toLowerCase();\nif (!fromEmail || !fromEmail.includes('@') || fromEmail === SENDER_EMAIL.toLowerCase()) {\n  return null; // skip our own mail and malformed senders\n}\nconst meta = j.metadata || {};\nconst zohoMessageId = String(j.messageId || meta['message-id'] || meta.messageId || '').trim();\nconst body = String(j.textPlain || j.textHtml || j.text || '').trim();\nif (!body) return null;\nreturn { json: { fromEmail, subject: String(j.subject || ''), body: body.slice(0, 20000), zohoMessageId } };"
+        "jsCode": "const SENDER_EMAIL = 'admin@centrisec.com'; // change if needed\nconst j = $json;\nconst meta = j.metadata || {};\nconst fromRaw = String(j.from || meta.from || '');\nconst match = fromRaw.match(/<([^>]+)>/);\nconst from_email = (match ? match[1] : fromRaw).trim().toLowerCase();\nif (!from_email || !from_email.includes('@') || from_email === SENDER_EMAIL.toLowerCase()) return null;\nconst body = String(j.textPlain || j.text || '').trim();\nif (!body) return null;\nreturn { json: { from_email, from_name: String(j.fromName || ''), subject: String(j.subject || ''), body: body.slice(0, 20000), received_at: String(j.date || new Date().toISOString()), message_id: String(j.messageId || meta['message-id'] || ''), in_reply_to: String(meta['in-reply-to'] || ''), references: String(meta.references || ''), raw_payload: j } };"
       },
       "id": "b2c3d4e5-0003-4000-8000-000000000003",
       "name": "Extract reply",
@@ -40,20 +40,23 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "OUTREACH_BASE_URL/api/replies",
+        "url": "OUTREACH_BASE_URL/replies/ingest",
         "authentication": "genericCredentialType",
         "genericAuthType": "httpHeaderAuth",
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ fromEmail: $json.fromEmail, subject: $json.subject, body: $json.body, zohoMessageId: $json.zohoMessageId }) }}",
-        "options": {}
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {},
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 5000
       },
       "id": "b2c3d4e5-0004-4000-8000-000000000004",
-      "name": "POST /api/replies (classify)",
+      "name": "POST /replies/ingest",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [900, 160],
-      "credentials": { "httpHeaderAuth": { "name": "Outreach API" } }
+      "credentials": { "httpHeaderAuth": { "name": "n8n webhook secret" } }
     },
     {
       "parameters": {
@@ -128,8 +131,8 @@
   ],
   "connections": {
     "New email (Zoho IMAP)": { "main": [[{ "node": "Extract reply", "type": "main", "index": 0 }]] },
-    "Extract reply": { "main": [[{ "node": "POST /api/replies (classify)", "type": "main", "index": 0 }]] },
-    "POST /api/replies (classify)": { "main": [[{ "node": "Positive reply?", "type": "main", "index": 0 }]] },
+    "Extract reply": { "main": [[{ "node": "POST /replies/ingest", "type": "main", "index": 0 }]] },
+    "POST /replies/ingest": { "main": [[{ "node": "Positive reply?", "type": "main", "index": 0 }]] },
     "Positive reply?": {
       "main": [
         [{ "node": "Telegram: warm lead", "type": "main", "index": 0 }],
