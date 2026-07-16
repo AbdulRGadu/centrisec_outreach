@@ -1,0 +1,217 @@
+import { recordEvent } from './db';
+import { intVar, type Env } from './env';
+import { addSuppression, isSuppressed, unsubTokenFor } from './suppression';
+import type { LeadRow, MessageRow } from './types';
+import { dayString, isInSendWindow, secondsToNextWindowOpen } from './util/time';
+import { ensureFooter, unsubscribeUrl } from './util/text';
+import { getAccessToken, sendMail, ZohoError } from './zoho';
+
+export type SendOutcome =
+  | { action: 'sent'; dryRun: boolean }
+  | { action: 'ack'; reason: string }
+  | { action: 'retry'; delaySeconds: number; reason: string };
+
+// Queues cap delaySeconds at 12h/24h depending on plan; stay safely under.
+const MAX_DELAY_SECONDS = 85_800;
+
+function clampDelay(seconds: number): number {
+  return Math.min(Math.max(seconds, 60), MAX_DELAY_SECONDS);
+}
+
+async function decrementCounter(env: Env, day: string): Promise<void> {
+  await env.DB
+    .prepare(`UPDATE send_counters SET count = count - 1 WHERE day = ?1 AND count > 0`)
+    .bind(day)
+    .run();
+}
+
+/** Atomically take one send slot for the day. Returns false when the cap is reached. */
+async function takeDailySlot(env: Env, day: string, cap: number): Promise<boolean> {
+  const attempt = () =>
+    env.DB
+      .prepare(`UPDATE send_counters SET count = count + 1 WHERE day = ?1 AND count < ?2`)
+      .bind(day, cap)
+      .run();
+  let res = await attempt();
+  if ((res.meta.changes ?? 0) > 0) return true;
+  await env.DB.prepare(`INSERT OR IGNORE INTO send_counters (day, count) VALUES (?1, 0)`).bind(day).run();
+  res = await attempt();
+  return (res.meta.changes ?? 0) > 0;
+}
+
+async function markFailed(env: Env, messageId: string, error: string): Promise<void> {
+  await env.DB
+    .prepare(`UPDATE messages SET status = 'failed', error = ?1, updated_at = datetime('now') WHERE id = ?2`)
+    .bind(error.slice(0, 500), messageId)
+    .run();
+}
+
+/** Undo a 'sending' claim so the message can be retried later. */
+async function revertToQueued(env: Env, messageId: string, error: string): Promise<void> {
+  await env.DB
+    .prepare(
+      `UPDATE messages SET status = 'queued', error = ?1, updated_at = datetime('now')
+       WHERE id = ?2 AND status = 'sending'`
+    )
+    .bind(error.slice(0, 500), messageId)
+    .run();
+}
+
+/**
+ * The single send path - used by the queue consumer and by /send-now.
+ * D1 is the source of truth; every gate is re-checked here at send time.
+ */
+export async function processSend(env: Env, messageId: string): Promise<SendOutcome> {
+  const message = await env.DB
+    .prepare(`SELECT * FROM messages WHERE id = ?1`)
+    .bind(messageId)
+    .first<MessageRow>();
+  if (!message || message.direction !== 'outbound') return { action: 'ack', reason: 'message not found' };
+  // Idempotency: duplicate queue delivery of an already-handled message is a no-op.
+  if (message.status !== 'queued') return { action: 'ack', reason: `status is '${message.status}'` };
+
+  if (!message.lead_id) {
+    await markFailed(env, messageId, 'no lead attached');
+    return { action: 'ack', reason: 'no lead' };
+  }
+  const lead = await env.DB
+    .prepare(`SELECT * FROM leads WHERE id = ?1`)
+    .bind(message.lead_id)
+    .first<LeadRow>();
+  if (!lead) {
+    await markFailed(env, messageId, 'lead not found');
+    return { action: 'ack', reason: 'lead not found' };
+  }
+
+  // Gate 1: suppression (final check - the list may have grown since approval).
+  const suppressedReason = await isSuppressed(env.DB, lead.email, lead.domain);
+  if (suppressedReason) {
+    await markFailed(env, messageId, `suppressed: ${suppressedReason}`);
+    const leadStatus = suppressedReason === 'unsubscribe' ? 'unsubscribed' : 'disqualified';
+    await env.DB
+      .prepare(`UPDATE leads SET status = ?1, updated_at = datetime('now') WHERE id = ?2`)
+      .bind(leadStatus, lead.id)
+      .run();
+    await recordEvent(env.DB, lead.id, 'send_blocked', { message_id: messageId, reason: suppressedReason });
+    return { action: 'ack', reason: 'suppressed' };
+  }
+
+  // Gate 2: one cold email per lead.
+  const dupe = await env.DB
+    .prepare(
+      `SELECT id FROM messages
+       WHERE lead_id = ?1 AND direction = 'outbound' AND id != ?2
+         AND status IN ('sending','sent','send_unknown') LIMIT 1`
+    )
+    .bind(lead.id, messageId)
+    .first();
+  if (dupe) {
+    await markFailed(env, messageId, 'another email was already sent to this lead');
+    await recordEvent(env.DB, lead.id, 'send_blocked', { message_id: messageId, reason: 'one_email_rule' });
+    return { action: 'ack', reason: 'one-email rule' };
+  }
+
+  // Gate 3: business-hours send window (Africa/Lagos by default).
+  if (!isInSendWindow(env)) {
+    const delay = clampDelay(secondsToNextWindowOpen(env));
+    await recordEvent(env.DB, lead.id, 'send_deferred', { message_id: messageId, reason: 'window', delay });
+    return { action: 'retry', delaySeconds: delay, reason: 'outside send window' };
+  }
+
+  // Gate 4: daily cap, taken atomically.
+  const day = dayString(env.TIMEZONE);
+  const cap = intVar(env.DAILY_SEND_CAP, 10);
+  if (!(await takeDailySlot(env, day, cap))) {
+    const delay = clampDelay(secondsToNextWindowOpen(env));
+    await recordEvent(env.DB, lead.id, 'send_deferred', { message_id: messageId, reason: 'daily_cap', delay });
+    return { action: 'retry', delaySeconds: delay, reason: 'daily cap reached' };
+  }
+
+  // Gate 5: per-domain courtesy cap (don't pile onto one company).
+  const domainCap = intVar(env.DOMAIN_WEEKLY_CAP, 2);
+  const domainSends = await env.DB
+    .prepare(
+      `SELECT COUNT(*) AS n FROM messages
+       WHERE direction = 'outbound' AND status = 'sent'
+         AND to_email LIKE '%@' || ?1 AND sent_at > datetime('now','-7 days')`
+    )
+    .bind(lead.domain)
+    .first<{ n: number }>();
+  if ((domainSends?.n ?? 0) >= domainCap) {
+    await decrementCounter(env, day);
+    await recordEvent(env.DB, lead.id, 'send_deferred', { message_id: messageId, reason: 'domain_cap' });
+    return { action: 'retry', delaySeconds: clampDelay(86_400), reason: 'domain weekly cap' };
+  }
+
+  // Claim - the double-send guard. Only one consumer can flip queued -> sending.
+  const claim = await env.DB
+    .prepare(
+      `UPDATE messages SET status = 'sending', attempts = attempts + 1, updated_at = datetime('now')
+       WHERE id = ?1 AND status = 'queued'`
+    )
+    .bind(messageId)
+    .run();
+  if ((claim.meta.changes ?? 0) === 0) {
+    await decrementCounter(env, day);
+    return { action: 'ack', reason: 'claimed elsewhere' };
+  }
+
+  // Compliance footer: identity + physical address + working opt-out link.
+  const token = await unsubTokenFor(env, lead.id);
+  const finalBody = ensureFooter(env, message.body ?? '', unsubscribeUrl(env, lead.id, token));
+  const subject = message.subject ?? 'Centrisec';
+
+  try {
+    const sent = await trySendWithAuthRetry(env, lead.email, subject, finalBody);
+    await env.DB
+      .prepare(
+        `UPDATE messages SET status = 'sent', body = ?1, error = NULL,
+           sent_at = datetime('now'), updated_at = datetime('now')
+         WHERE id = ?2 AND status = 'sending'`
+      )
+      .bind(finalBody, messageId)
+      .run();
+    await env.DB
+      .prepare(`UPDATE leads SET status = 'sent', updated_at = datetime('now') WHERE id = ?1`)
+      .bind(lead.id)
+      .run();
+    await recordEvent(env.DB, lead.id, 'sent', { message_id: messageId, dry_run: sent.dryRun });
+    return { action: 'sent', dryRun: sent.dryRun };
+  } catch (err) {
+    if (err instanceof ZohoError && err.kind === 'permanent') {
+      await markFailed(env, messageId, err.message);
+      await env.DB
+        .prepare(`UPDATE leads SET status = 'bounced', updated_at = datetime('now') WHERE id = ?1`)
+        .bind(lead.id)
+        .run();
+      await addSuppression(env.DB, 'email', lead.email, 'bounce', messageId);
+      await decrementCounter(env, day);
+      await recordEvent(env.DB, lead.id, 'send_failed', { message_id: messageId, kind: 'permanent' });
+      return { action: 'ack', reason: 'permanent send failure' };
+    }
+    const kind = err instanceof ZohoError ? err.kind : 'unknown';
+    const messageText = err instanceof Error ? err.message : String(err);
+    await revertToQueued(env, messageId, messageText);
+    await decrementCounter(env, day);
+    await recordEvent(env.DB, lead.id, 'send_failed', { message_id: messageId, kind });
+    const delay = kind === 'auth' ? 3600 : 900;
+    return { action: 'retry', delaySeconds: clampDelay(delay), reason: `send error (${kind})` };
+  }
+}
+
+async function trySendWithAuthRetry(
+  env: Env,
+  to: string,
+  subject: string,
+  content: string
+): Promise<{ dryRun: boolean }> {
+  try {
+    return await sendMail(env, { to, subject, content });
+  } catch (err) {
+    if (err instanceof ZohoError && err.kind === 'auth') {
+      await getAccessToken(env, true);
+      return sendMail(env, { to, subject, content });
+    }
+    throw err;
+  }
+}

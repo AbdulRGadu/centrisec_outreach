@@ -1,0 +1,27 @@
+{
+  "name": "centrisec-outreach",
+  "private": true,
+  "version": "0.1.0",
+  "description": "AI-assisted outbound prospecting and reply qualification system for Centrisec",
+  "type": "module",
+  "packageManager": "pnpm@10.11.0",
+  "pnpm": {
+    "onlyBuiltDependencies": ["esbuild", "workerd", "sharp"]
+  },
+  "scripts": {
+    "dev": "wrangler dev --port 8788 --ip 127.0.0.1",
+    "deploy": "wrangler deploy",
+    "check": "tsc --noEmit",
+    "db:migrate:local": "wrangler d1 migrations apply outreach-db --local",
+    "db:migrate:remote": "wrangler d1 migrations apply outreach-db --remote",
+    "context:pull": "node scripts/pull-website-context.mjs"
+  },
+  "dependencies": {
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250628.0",
+    "typescript": "^6.0.0",
+    "wrangler": "^4.87.0"
+  }
+}

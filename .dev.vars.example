@@ -1,0 +1,26 @@
+# Copy this file to .dev.vars for local development. NEVER commit .dev.vars.
+
+# Bearer token used by the admin dashboard and n8n. Any string locally.
+API_KEY=dev-local-key
+
+# Cloudflare API token with permissions: Account -> Workers AI -> Read + Edit.
+# Needed for real scoring/drafting/classification. Leave placeholder to test
+# everything except the AI calls.
+CF_AI_TOKEN=replace-me
+
+# Zoho Self Client credentials (see docs/zoho-oauth-setup.md).
+# Leave placeholders and keep DRY_RUN=true to test sending without Zoho.
+ZOHO_CLIENT_ID=replace-me
+ZOHO_CLIENT_SECRET=replace-me
+ZOHO_REFRESH_TOKEN=replace-me
+
+# HMAC key for unsubscribe links. Any string locally; long random in production.
+UNSUB_SECRET=dev-unsub-secret-change-me
+
+# --- Local-only overrides of wrangler.jsonc vars ---
+
+# true = sendMail logs and succeeds without calling Zoho. Safe end-to-end testing.
+DRY_RUN=true
+
+# So generated unsubscribe links point at the local server.
+PUBLIC_BASE_URL=http://127.0.0.1:8788
