@@ -16,8 +16,15 @@ export class AiError extends Error {
 
 interface ChatCompletionsEnvelope {
   choices?: Array<{ message?: { content?: unknown } }>;
+  result?: ChatCompletionsEnvelope;
+  state?: string;
   error?: { message?: string };
   errors?: Array<{ code?: number; message?: string }>;
+}
+
+function completionContent(envelope: ChatCompletionsEnvelope): unknown {
+  return envelope.choices?.[0]?.message?.content
+    ?? envelope.result?.choices?.[0]?.message?.content;
 }
 
 async function callModel(
@@ -37,13 +44,19 @@ async function callModel(
   // on the same Cloudflare AI Gateway path.
   if (useGateway && env.AI_GATEWAY_ID) headers['cf-aig-gateway-id'] = env.AI_GATEWAY_ID;
 
+  const completionBudget = model.startsWith('google/')
+    ? Math.max(maxTokens, 4096)
+    : maxTokens;
   const res = await fetch(url, {
     method: 'POST',
     headers,
     body: JSON.stringify({
       model,
       messages,
-      max_tokens: maxTokens,
+      // Gemini's completion budget includes hidden reasoning tokens. A 1,200
+      // token cap can therefore truncate a short JSON email after only a few
+      // visible words. Keep enough headroom for reasoning plus the JSON body.
+      max_completion_tokens: completionBudget,
       response_format: {
         type: 'json_schema',
         json_schema: { name: 'centrisec_output', strict: true, schema: jsonSchema },
@@ -58,7 +71,7 @@ async function callModel(
       || `HTTP ${res.status}`;
     throw new AiError('call', `AI Gateway request failed: ${detail}`);
   }
-  const content = envelope.choices?.[0]?.message?.content;
+  const content = completionContent(envelope);
   if (content === undefined) throw new AiError('call', 'AI Gateway returned no completion content');
   return content;
 }

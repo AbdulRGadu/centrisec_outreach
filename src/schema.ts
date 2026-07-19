@@ -1,13 +1,26 @@
 import type { Env } from './env';
 import type { ProspectSegment } from './services/leadSegmentation';
+import schemaConvergenceMigration from '../migrations/0007_production_schema_convergence.sql';
 
-const MIGRATION_ID = 6;
-const MIGRATION_NAME = '0006_drafting_strategy.sql';
+const MIGRATION_ID = 7;
+const MIGRATION_NAME = '0007_production_schema_convergence.sql';
 const REQUIRED_COLUMNS = {
   leads: {
     sub_industry: 'sub_industry TEXT',
+    sales_stage: "sales_stage TEXT NOT NULL DEFAULT 'prospecting'",
+    next_action: 'next_action TEXT',
+    country: 'country TEXT',
+    company_size: 'company_size TEXT',
+    contact_profile_url: 'contact_profile_url TEXT',
+    source_url: 'source_url TEXT',
+    structured_notes: 'structured_notes TEXT',
+    discovery_score: 'discovery_score INTEGER',
+    data_confidence: 'data_confidence INTEGER',
+    last_verified_at: 'last_verified_at TEXT',
   },
   messages: {
+    next_action: 'next_action TEXT',
+    received_at: 'received_at TEXT',
     buyer_persona: 'buyer_persona TEXT',
     security_context: 'security_context TEXT',
     recommended_offer: 'recommended_offer TEXT',
@@ -17,6 +30,33 @@ const REQUIRED_COLUMNS = {
     next_step_plan: 'next_step_plan TEXT',
   },
 } as const;
+
+const REPLY_INGEST_SCHEMA = `
+CREATE TABLE IF NOT EXISTS reply_ingest_logs (
+  id TEXT PRIMARY KEY,
+  from_email TEXT,
+  message_id TEXT,
+  in_reply_to TEXT,
+  references_header TEXT,
+  raw_payload TEXT,
+  auth_status TEXT NOT NULL CHECK (auth_status IN ('authorized','unauthorized')),
+  match_status TEXT CHECK (match_status IN (
+    'matched_by_message_id','matched_by_in_reply_to','matched_by_sender_email',
+    'matched_by_sender_domain','unmatched'
+  )),
+  classification_status TEXT NOT NULL DEFAULT 'pending' CHECK (classification_status IN
+    ('pending','classified','failed','skipped')),
+  classification TEXT,
+  confidence REAL,
+  lead_id TEXT,
+  inbound_message_id TEXT,
+  error TEXT,
+  payload_received_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_reply_ingest_created ON reply_ingest_logs(payload_received_at DESC);
+CREATE INDEX IF NOT EXISTS idx_reply_ingest_message ON reply_ingest_logs(message_id);
+`;
 
 let readiness: Promise<void> | null = null;
 
@@ -30,8 +70,18 @@ async function schemaIsReady(db: D1Database): Promise<boolean> {
     tableColumns(db, 'leads'),
     tableColumns(db, 'messages'),
   ]);
+  const replyTable = await db.prepare(
+    "SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = 'reply_ingest_logs'"
+  ).first<{ present: number }>();
+  const definitions = await db.prepare(
+    "SELECT name, sql FROM sqlite_master WHERE type = 'table' AND name IN ('leads','messages')"
+  ).all<{ name: string; sql: string }>();
+  const sql = new Map(definitions.results.map((row) => [row.name, row.sql ?? '']));
   return Object.keys(REQUIRED_COLUMNS.leads).every((name) => leadColumns.has(name))
-    && Object.keys(REQUIRED_COLUMNS.messages).every((name) => messageColumns.has(name));
+    && Object.keys(REQUIRED_COLUMNS.messages).every((name) => messageColumns.has(name))
+    && !!replyTable
+    && (sql.get('leads') ?? '').includes("'replied_positive'")
+    && (sql.get('messages') ?? '').includes("'needs_review'");
 }
 
 async function recordMigration(db: D1Database): Promise<void> {
@@ -54,6 +104,15 @@ async function applyRequiredSchema(env: Env): Promise<void> {
   for (const [table, columns] of Object.entries(REQUIRED_COLUMNS)) {
     for (const [name, definition] of Object.entries(columns)) {
       await ensureColumn(env.DB, table as keyof typeof REQUIRED_COLUMNS, name, definition);
+    }
+  }
+  await env.DB.exec(REPLY_INGEST_SCHEMA);
+  if (!(await schemaIsReady(env.DB))) {
+    try {
+      await env.DB.exec(schemaConvergenceMigration);
+    } catch (error) {
+      // Concurrent isolates can race while converging the same legacy schema.
+      if (!(await schemaIsReady(env.DB))) throw error;
     }
   }
   if (!(await schemaIsReady(env.DB))) throw new Error('Drafting schema remains incomplete');

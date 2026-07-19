@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
+import { z } from 'zod';
+import { runJson } from '../src/ai/client.ts';
+import type { Env } from '../src/env.ts';
 import { validateDraftQuality } from '../src/services/draftQuality.ts';
 import { renderDraftEmail } from '../src/services/emailRenderer.ts';
 import { buildPersonalizationPlan } from '../src/services/personalization.ts';
@@ -111,5 +114,52 @@ test('Gemini is the default and model calls stay on the named AI Gateway', () =>
   assert.match(config, /"AI_GATEWAY_ID": "outreach"/);
   assert.match(client, /ai\/v1\/chat\/completions/);
   assert.match(client, /cf-aig-gateway-id/);
+  assert.match(client, /max_completion_tokens: completionBudget/);
+  assert.match(client, /envelope\.result\?\.choices/);
   assert.doesNotMatch(client, /callModel\(env, model, messages, jsonSchema, maxTokens, false\)/);
+});
+
+test('Gemini calls unwrap the Cloudflare result envelope and reserve reasoning headroom', async () => {
+  const originalFetch = globalThis.fetch;
+  let requestBody: Record<string, unknown> | null = null;
+  globalThis.fetch = async (_input, init) => {
+    requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    return new Response(JSON.stringify({
+      state: 'Completed',
+      result: {
+        choices: [{ message: { content: '{"value":"complete"}' }, finish_reason: 'stop' }],
+      },
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  };
+  try {
+    const result = await runJson(
+      {
+        CF_ACCOUNT_ID: 'account',
+        CF_AI_TOKEN: 'token',
+        AI_GATEWAY_ID: 'outreach',
+      } as Env,
+      'google/gemini-3.5-flash',
+      [{ role: 'user', content: 'Return JSON.' }],
+      { type: 'object', properties: { value: { type: 'string' } }, required: ['value'] },
+      z.object({ value: z.string() }),
+      { maxTokens: 900 }
+    );
+    assert.deepEqual(result, { value: 'complete' });
+    assert.equal(requestBody?.max_completion_tokens, 4096);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('runtime schema convergence covers imported lead and reply fields', () => {
+  const schema = readFileSync(new URL('../src/schema.ts', import.meta.url), 'utf8');
+  const migration = readFileSync(
+    new URL('../migrations/0007_production_schema_convergence.sql', import.meta.url),
+    'utf8'
+  );
+  assert.match(schema, /country: 'country TEXT'/);
+  assert.match(schema, /reply_ingest_logs/);
+  assert.match(migration, /'replied_positive'/);
+  assert.match(migration, /'needs_review'/);
+  assert.match(migration, /messages_v7_backup/);
 });
