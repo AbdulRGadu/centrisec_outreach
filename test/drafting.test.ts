@@ -103,3 +103,13 @@ test('draft prompt source carries structured strategy and strict repair requirem
   assert.match(promptSource, /failed mandatory quality checks/);
   assert.match(promptSource, /exact CTA/);
 });
+
+test('Gemini is the default and model calls stay on the named AI Gateway', () => {
+  const config = readFileSync(new URL('../wrangler.jsonc', import.meta.url), 'utf8');
+  const client = readFileSync(new URL('../src/ai/client.ts', import.meta.url), 'utf8');
+  assert.match(config, /"DEFAULT_AI_MODEL": "google\/gemini-3\.5-flash"/);
+  assert.match(config, /"AI_GATEWAY_ID": "outreach"/);
+  assert.match(client, /ai\/v1\/chat\/completions/);
+  assert.match(client, /cf-aig-gateway-id/);
+  assert.doesNotMatch(client, /callModel\(env, model, messages, jsonSchema, maxTokens, false\)/);
+});

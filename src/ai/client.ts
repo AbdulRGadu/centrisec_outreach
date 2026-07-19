@@ -14,9 +14,9 @@ export class AiError extends Error {
   }
 }
 
-interface WorkersAiEnvelope {
-  success?: boolean;
-  result?: { response?: unknown } | null;
+interface ChatCompletionsEnvelope {
+  choices?: Array<{ message?: { content?: unknown } }>;
+  error?: { message?: string };
   errors?: Array<{ code?: number; message?: string }>;
 }
 
@@ -28,34 +28,39 @@ async function callModel(
   maxTokens: number,
   useGateway: boolean
 ): Promise<unknown> {
-  const url = `https://api.cloudflare.com/client/v4/accounts/${env.CF_ACCOUNT_ID}/ai/run/${model}`;
+  const url = `https://api.cloudflare.com/client/v4/accounts/${env.CF_ACCOUNT_ID}/ai/v1/chat/completions`;
   const headers: Record<string, string> = {
     Authorization: `Bearer ${env.CF_AI_TOKEN}`,
     'Content-Type': 'application/json',
   };
-  // Routing through AI Gateway gives logging/analytics; a plain Workers AI
-  // call is the fallback if the gateway itself has trouble.
+  // A named gateway keeps model switching, logs, token usage, and cost analytics
+  // on the same Cloudflare AI Gateway path.
   if (useGateway && env.AI_GATEWAY_ID) headers['cf-aig-gateway-id'] = env.AI_GATEWAY_ID;
 
   const res = await fetch(url, {
     method: 'POST',
     headers,
     body: JSON.stringify({
+      model,
       messages,
       max_tokens: maxTokens,
-      response_format: { type: 'json_schema', json_schema: jsonSchema },
+      response_format: {
+        type: 'json_schema',
+        json_schema: { name: 'centrisec_output', strict: true, schema: jsonSchema },
+      },
     }),
   });
 
-  if (res.status >= 500 && useGateway) {
-    return callModel(env, model, messages, jsonSchema, maxTokens, false);
+  const envelope = (await res.json().catch(() => null)) as ChatCompletionsEnvelope | null;
+  if (!res.ok || !envelope) {
+    const detail = envelope?.error?.message
+      || envelope?.errors?.map((e) => e.message).join('; ')
+      || `HTTP ${res.status}`;
+    throw new AiError('call', `AI Gateway request failed: ${detail}`);
   }
-  const envelope = (await res.json().catch(() => null)) as WorkersAiEnvelope | null;
-  if (!res.ok || !envelope || envelope.success === false) {
-    const detail = envelope?.errors?.map((e) => e.message).join('; ') || `HTTP ${res.status}`;
-    throw new AiError('call', `Workers AI request failed: ${detail}`);
-  }
-  return envelope.result?.response;
+  const content = envelope.choices?.[0]?.message?.content;
+  if (content === undefined) throw new AiError('call', 'AI Gateway returned no completion content');
+  return content;
 }
 
 function parseMaybeJson(value: unknown): unknown {

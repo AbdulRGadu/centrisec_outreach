@@ -45,8 +45,8 @@
     "CF_ACCOUNT_ID": "c042400a63d2d3d81042613f4abef9c1",
     "AI_GATEWAY_ID": "outreach",
     "AI_PROVIDER": "cloudflare_ai_gateway",
-    "DEFAULT_AI_MODEL": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
-    "AVAILABLE_AI_MODELS": "@cf/meta/llama-3.3-70b-instruct-fp8-fast,@cf/meta/llama-3.1-8b-instruct-fast",
+    "DEFAULT_AI_MODEL": "google/gemini-3.5-flash",
+    "AVAILABLE_AI_MODELS": "google/gemini-3.5-flash,google/gemini-3-flash,@cf/meta/llama-3.3-70b-instruct-fp8-fast,@cf/meta/llama-3.1-8b-instruct-fast",
     "ZOHO_MAIL_BASE": "https://mail.zoho.com",
     "ZOHO_ACCOUNTS_BASE": "https://accounts.zoho.com",
     "ZOHO_ACCOUNT_ID": "3635899000000008002",
@@ -68,7 +68,7 @@
   }
   // Secrets (set with `wrangler secret put NAME`, mirror in .dev.vars for local):
   //   API_KEY            - bearer token for the dashboard and n8n
-  //   CF_AI_TOKEN        - Cloudflare API token with Workers AI Read + Edit
+  //   CF_AI_TOKEN        - Cloudflare API token with AI Gateway + Workers AI permissions
   //   ZOHO_CLIENT_ID     - Zoho Self Client
   //   ZOHO_CLIENT_SECRET
   //   ZOHO_REFRESH_TOKEN

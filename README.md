@@ -57,8 +57,8 @@ draft generation, and reply classification. Suggested replies are deterministic,
 
 ```jsonc
 "AI_PROVIDER": "cloudflare_ai_gateway",
-"DEFAULT_AI_MODEL": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
-"AVAILABLE_AI_MODELS": "@cf/meta/llama-3.3-70b-instruct-fp8-fast,@cf/meta/llama-3.1-8b-instruct-fast"
+"DEFAULT_AI_MODEL": "google/gemini-3.5-flash",
+"AVAILABLE_AI_MODELS": "google/gemini-3.5-flash,google/gemini-3-flash,@cf/meta/llama-3.3-70b-instruct-fp8-fast,@cf/meta/llama-3.1-8b-instruct-fast"
 ```
 
 If the D1 selection is missing or no longer allowed, `DEFAULT_AI_MODEL` is used safely.
@@ -148,7 +148,8 @@ pnpm dev
 ```
 
 Use `DRY_RUN=true` locally to exercise the full pipeline without sending real mail. Real AI calls
-still need `CF_AI_TOKEN`.
+need `CF_AI_TOKEN` with AI Gateway permissions. Third-party models such as Gemini also require
+sufficient Cloudflare Unified Billing credits.
 
 ## API
 
