@@ -117,7 +117,8 @@ export default {
     const url = new URL(request.url);
     try {
       if (url.pathname === '/health') {
-        return jsonResponse({ ok: true, service: 'centrisec-outreach' });
+        await ensureDraftingSchema(env);
+        return jsonResponse({ ok: true, service: 'centrisec-outreach', schema: 'ready' });
       }
       if (url.pathname === '/unsubscribe') {
         return await handleUnsubscribe(request, env);
