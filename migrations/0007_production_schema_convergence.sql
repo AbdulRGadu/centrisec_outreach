@@ -47,7 +47,8 @@ CREATE TABLE leads_v7 (
   structured_notes TEXT,
   discovery_score INTEGER,
   data_confidence INTEGER,
-  last_verified_at TEXT
+  last_verified_at TEXT,
+  delivery_test INTEGER NOT NULL DEFAULT 0 CHECK (delivery_test IN (0,1))
 );
 
 INSERT INTO leads_v7 (
@@ -55,7 +56,7 @@ INSERT INTO leads_v7 (
   industry, sub_industry, segment, fit_score, fit_reason, pain_points, source,
   status, last_reply_classification, notes, created_at, updated_at, sales_stage,
   next_action, country, company_size, contact_profile_url, source_url,
-  structured_notes, discovery_score, data_confidence, last_verified_at
+  structured_notes, discovery_score, data_confidence, last_verified_at, delivery_test
 )
 SELECT
   id, email, domain, first_name, last_name, role, company, company_website,
@@ -77,7 +78,7 @@ SELECT
   END,
   last_reply_classification, notes, created_at, updated_at, sales_stage,
   next_action, country, company_size, contact_profile_url, source_url,
-  structured_notes, discovery_score, data_confidence, last_verified_at
+  structured_notes, discovery_score, data_confidence, last_verified_at, 0
 FROM leads;
 
 DROP TABLE leads;

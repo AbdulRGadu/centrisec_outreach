@@ -1,6 +1,7 @@
 import { recordEvent } from './db';
 import { intVar, type Env } from './env';
 import { addSuppression, isSuppressed } from './suppression';
+import { deliveryTestEnabled, priorOutboundBlocksDelivery } from './services/deliveryTest';
 import type { LeadRow, MessageRow } from './types';
 import { dayString, isInSendWindow, secondsToNextWindowOpen, weekStartString } from './util/time';
 import { ensureFooter } from './util/text';
@@ -112,6 +113,7 @@ export async function processSend(env: Env, messageId: string): Promise<SendOutc
     await markFailed(env, messageId, 'lead not found');
     return { action: 'ack', reason: 'lead not found' };
   }
+  const testDelivery = deliveryTestEnabled(lead);
 
   // Gate 1: suppression (final check - the list may have grown since approval).
   const suppressedReason = await isSuppressed(env.DB, lead.email, lead.domain);
@@ -130,15 +132,15 @@ export async function processSend(env: Env, messageId: string): Promise<SendOutc
   }
 
   // Gate 2: one cold email per lead.
-  const dupe = await env.DB
+  const dupes = await env.DB
     .prepare(
-      `SELECT id FROM messages
+      `SELECT id, status FROM messages
        WHERE lead_id = ?1 AND direction = 'outbound' AND id != ?2
-         AND status IN ('sending','sent','send_unknown') LIMIT 1`
+         AND status IN ('approved','queued','sending','sent','send_unknown')`
     )
     .bind(lead.id, messageId)
-    .first();
-  if (dupe) {
+    .all<{ id: string; status: string }>();
+  if (dupes.results.some((row) => priorOutboundBlocksDelivery(testDelivery, row.status))) {
     await markFailed(env, messageId, 'another email was already sent to this lead');
     await recordEvent(env.DB, lead.id, 'send_blocked', { message_id: messageId, reason: 'one_email_rule' });
     return { action: 'ack', reason: 'one-email rule' };
@@ -162,12 +164,16 @@ export async function processSend(env: Env, messageId: string): Promise<SendOutc
 
   // Gate 5: per-domain courtesy cap (don't pile onto one company). The slot
   // is reserved atomically so concurrent queue consumers cannot exceed it.
-  const domainCap = intVar(env.DOMAIN_WEEKLY_CAP, 2);
   const weekStart = weekStartString(env.TIMEZONE);
-  if (!(await takeDomainSlot(env, weekStart, lead.domain, domainCap))) {
-    await decrementCounter(env, day);
-    await recordEvent(env.DB, lead.id, 'send_deferred', { message_id: messageId, reason: 'domain_cap' });
-    return { action: 'retry', delaySeconds: clampDelay(86_400), reason: 'domain weekly cap' };
+  let domainSlotTaken = false;
+  if (!testDelivery) {
+    const domainCap = intVar(env.DOMAIN_WEEKLY_CAP, 2);
+    if (!(await takeDomainSlot(env, weekStart, lead.domain, domainCap))) {
+      await decrementCounter(env, day);
+      await recordEvent(env.DB, lead.id, 'send_deferred', { message_id: messageId, reason: 'domain_cap' });
+      return { action: 'retry', delaySeconds: clampDelay(86_400), reason: 'domain weekly cap' };
+    }
+    domainSlotTaken = true;
   }
 
   // Claim - the double-send guard. Only one consumer can flip queued -> sending.
@@ -180,7 +186,7 @@ export async function processSend(env: Env, messageId: string): Promise<SendOutc
     .run();
   if ((claim.meta.changes ?? 0) === 0) {
     await decrementCounter(env, day);
-    await decrementDomainCounter(env, weekStart, lead.domain);
+    if (domainSlotTaken) await decrementDomainCounter(env, weekStart, lead.domain);
     return { action: 'ack', reason: 'claimed elsewhere' };
   }
 
@@ -199,26 +205,30 @@ export async function processSend(env: Env, messageId: string): Promise<SendOutc
       .run();
     await env.DB
       .prepare(
-        `UPDATE leads SET status = 'sent', sales_stage = 'awaiting_reply',
+        `UPDATE leads SET status = 'sent', delivery_test = 0, sales_stage = 'awaiting_reply',
            next_action = 'wait_for_reply_no_auto_follow_up', updated_at = datetime('now') WHERE id = ?1`
       )
       .bind(lead.id)
       .run();
-    await recordEvent(env.DB, lead.id, 'sent', { message_id: messageId, dry_run: sent.dryRun });
+    await recordEvent(env.DB, lead.id, 'sent', {
+      message_id: messageId,
+      dry_run: sent.dryRun,
+      delivery_test: testDelivery,
+    });
     return { action: 'sent', dryRun: sent.dryRun };
   } catch (err) {
     if (err instanceof ZohoError && err.kind === 'permanent') {
       await markFailed(env, messageId, err.message);
       await env.DB
         .prepare(
-          `UPDATE leads SET status = 'failed', sales_stage = 'delivery_issue',
+          `UPDATE leads SET status = 'failed', delivery_test = 0, sales_stage = 'delivery_issue',
              next_action = 'manual_review', updated_at = datetime('now') WHERE id = ?1`
         )
         .bind(lead.id)
         .run();
       await addSuppression(env.DB, 'email', lead.email, 'hard_bounce', messageId);
       await decrementCounter(env, day);
-      await decrementDomainCounter(env, weekStart, lead.domain);
+      if (domainSlotTaken) await decrementDomainCounter(env, weekStart, lead.domain);
       await recordEvent(env.DB, lead.id, 'send_failed', { message_id: messageId, kind: 'permanent' });
       return { action: 'ack', reason: 'permanent send failure' };
     }
@@ -226,7 +236,7 @@ export async function processSend(env: Env, messageId: string): Promise<SendOutc
     const messageText = err instanceof Error ? err.message : String(err);
     await revertToQueued(env, messageId, messageText);
     await decrementCounter(env, day);
-    await decrementDomainCounter(env, weekStart, lead.domain);
+    if (domainSlotTaken) await decrementDomainCounter(env, weekStart, lead.domain);
     await recordEvent(env.DB, lead.id, 'send_failed', { message_id: messageId, kind });
     const delay = kind === 'auth' ? 3600 : 900;
     return { action: 'retry', delaySeconds: clampDelay(delay), reason: `send error (${kind})` };

@@ -7,6 +7,7 @@ import { intVar, type Env } from './env';
 import { HttpError } from './http';
 import { getLead } from './leads';
 import { improveDraftUntilSendable, type DraftAutomationResult } from './services/draftAutomation';
+import { deliveryTestEnabled, priorOutboundBlocksDelivery } from './services/deliveryTest';
 import { segmentLeadRow } from './services/leadSegmentation';
 import { planInitialNextStep } from './services/nextStepPlanner';
 import { buildPersonalizationPlan } from './services/personalization';
@@ -72,7 +73,8 @@ export async function draftLead(env: Env, lead: LeadRow, opts?: { force?: boolea
     )
     .bind(lead.id)
     .all<{ id: string; status: string }>();
-  const hardBlockers = existing.results.filter((m) => !['draft', 'needs_review'].includes(m.status));
+  const testDelivery = deliveryTestEnabled(lead);
+  const hardBlockers = existing.results.filter((m) => priorOutboundBlocksDelivery(testDelivery, m.status));
   const openDrafts = existing.results.filter((m) => ['draft', 'needs_review'].includes(m.status));
   if (hardBlockers.length > 0) {
     throw new HttpError(409, 'One cold email per lead: an email is already approved, queued, or sent.');

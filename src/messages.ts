@@ -4,6 +4,7 @@ import { HttpError, jsonResponse, normalizeMultiline, normalizeText } from './ht
 import { getLead } from './leads';
 import { autoRepairStoredDraft } from './pipeline';
 import { processSend } from './sending';
+import { deliveryTestEnabled, priorOutboundBlocksDelivery } from './services/deliveryTest';
 import { validateDraftQuality } from './services/draftQuality';
 import { normalizeDraftSubject, renderDraftEmail } from './services/emailRenderer';
 import { buildPersonalizationPlan } from './services/personalization';
@@ -122,13 +123,13 @@ async function assertEligibleToSend(env: Env, message: MessageRow): Promise<Lead
   }
   const other = await env.DB
     .prepare(
-      `SELECT id FROM messages
+      `SELECT id, status FROM messages
        WHERE lead_id = ?1 AND direction = 'outbound' AND id != ?2
-         AND status IN ('approved','queued','sending','sent','send_unknown') LIMIT 1`
+         AND status IN ('approved','queued','sending','sent','send_unknown')`
     )
     .bind(lead.id, message.id)
-    .first();
-  if (other) {
+    .all<{ id: string; status: string }>();
+  if (other.results.some((row) => priorOutboundBlocksDelivery(deliveryTestEnabled(lead), row.status))) {
     throw new HttpError(409, 'One cold email per lead: another email is already queued or sent');
   }
   return lead;

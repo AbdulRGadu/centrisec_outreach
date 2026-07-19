@@ -18,6 +18,7 @@ const REQUIRED_COLUMNS = {
     discovery_score: 'discovery_score INTEGER',
     data_confidence: 'data_confidence INTEGER',
     last_verified_at: 'last_verified_at TEXT',
+    delivery_test: 'delivery_test INTEGER NOT NULL DEFAULT 0 CHECK (delivery_test IN (0,1))',
   },
   messages: {
     next_action: 'next_action TEXT',

@@ -7,6 +7,7 @@ import type { Env } from '../src/env.ts';
 import { formatD1ExecScript } from '../src/util/sql.ts';
 import { validateDraftQuality } from '../src/services/draftQuality.ts';
 import { buildSafeFallbackDraft, improveDraftUntilSendable } from '../src/services/draftAutomation.ts';
+import { deliveryTestEnabled, priorOutboundBlocksDelivery } from '../src/services/deliveryTest.ts';
 import { renderDraftEmail } from '../src/services/emailRenderer.ts';
 import { buildPersonalizationPlan } from '../src/services/personalization.ts';
 import type { LeadRow } from '../src/types.ts';
@@ -20,6 +21,7 @@ function lead(values: Partial<LeadRow> = {}): LeadRow {
     last_reply_classification: null, notes: null, country: 'Nigeria', company_size: null,
     contact_profile_url: null, source_url: null, structured_notes: null, discovery_score: null,
     data_confidence: null, last_verified_at: null, sales_stage: 'prospecting', next_action: null,
+    delivery_test: 0,
     created_at: '', updated_at: '',
     ...values,
   };
@@ -104,6 +106,15 @@ test('persistent AI failures use a validated fallback after two bounded attempts
   assert.equal(result.repair_attempts, 2);
   assert.equal(result.repair_failures, 2);
   assert.equal(result.used_fallback, true);
+});
+
+test('confirmed delivery tests bypass only prior sent history', () => {
+  const row = lead({ delivery_test: 1 });
+  assert.equal(deliveryTestEnabled(row), true);
+  assert.equal(priorOutboundBlocksDelivery(true, 'sent'), false);
+  assert.equal(priorOutboundBlocksDelivery(true, 'sending'), true);
+  assert.equal(priorOutboundBlocksDelivery(true, 'send_unknown'), true);
+  assert.equal(priorOutboundBlocksDelivery(false, 'sent'), true);
 });
 
 test('renderer fixes greeting and signoff without rewriting the message', () => {
@@ -226,6 +237,7 @@ test('runtime schema convergence covers imported lead and reply fields', () => {
     'utf8'
   );
   assert.match(schema, /country: 'country TEXT'/);
+  assert.match(schema, /delivery_test: 'delivery_test INTEGER NOT NULL DEFAULT 0/);
   assert.match(schema, /reply_ingest_logs/);
   assert.match(migration, /'replied_positive'/);
   assert.match(migration, /'needs_review'/);

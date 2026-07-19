@@ -243,11 +243,30 @@ export async function handleLeadPatch(id: string, body: Record<string, unknown>,
     await updateSalesAction(env, id, 'suppressed', 'do_not_contact', 'suppress', action);
   } else if (action === 'manual_review') {
     await updateSalesAction(env, id, 'manual_review', 'manual_review', 'manual_review', action);
+  } else if (action === 'enable_delivery_test') {
+    const confirmation = normalizeText(body.confirmEmail, 180).toLowerCase();
+    if (confirmation !== lead.email) {
+      throw new HttpError(400, 'confirmEmail must exactly match the lead email');
+    }
+    if (lead.status === 'suppressed' || await isLeadSuppressed(env, lead)) {
+      throw new HttpError(409, 'Suppressed leads cannot be enabled for delivery tests');
+    }
+    await env.DB.prepare(
+      `UPDATE leads SET delivery_test = 1, status = 'scored',
+         sales_stage = 'delivery_test', next_action = 'draft_test_email',
+         updated_at = datetime('now') WHERE id = ?1`
+    ).bind(id).run();
+    await recordEvent(env.DB, id, 'delivery_test_enabled', { confirmation: 'exact_email_match' });
   } else if (action) {
     throw new HttpError(400, `Unknown action '${action}'`);
   }
 
   return jsonResponse({ ok: true, lead: await getLead(env, id) });
+}
+
+async function isLeadSuppressed(env: Env, lead: LeadRow): Promise<boolean> {
+  const keys = await loadSuppressedKeys(env.DB, [lead.email], [lead.domain]);
+  return suppressionKeyHit(keys, lead.email);
 }
 
 async function updateSalesAction(

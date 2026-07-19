@@ -62,6 +62,7 @@ export interface LeadRow {
   last_verified_at: string | null;
   sales_stage: string;
   next_action: string | null;
+  delivery_test: number;
   created_at: string;
   updated_at: string;
 }
