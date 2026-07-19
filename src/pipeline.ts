@@ -11,12 +11,14 @@ import { normalizeDraftSubject, renderDraftEmail } from './services/emailRendere
 import { segmentLeadRow } from './services/leadSegmentation';
 import { planInitialNextStep } from './services/nextStepPlanner';
 import { buildPersonalizationPlan } from './services/personalization';
+import { compatibleLeadSegment } from './schema';
 import { isSuppressed } from './suppression';
 import type { LeadRow, MessageRow } from './types';
 import { wordCount } from './util/text';
 
 export async function scoreLead(env: Env, lead: LeadRow): Promise<LeadRow> {
   const deterministicStrategy = segmentLeadRow(lead);
+  const storedSegment = await compatibleLeadSegment(env.DB, deterministicStrategy.segment);
   const model = await activeAiModel(env);
   const result = await runJson(env, model, buildScoringMessages(lead), scoreJsonSchema, scoreResult);
   const fitScore = Math.round(result.fit_score);
@@ -27,7 +29,7 @@ export async function scoreLead(env: Env, lead: LeadRow): Promise<LeadRow> {
          updated_at = datetime('now')
        WHERE id = ?5`
     )
-    .bind(deterministicStrategy.segment, fitScore, result.fit_reason, JSON.stringify(result.pain_points.slice(0, 3)), lead.id)
+    .bind(storedSegment, fitScore, result.fit_reason, JSON.stringify(result.pain_points.slice(0, 3)), lead.id)
     .run();
   await recordEvent(env.DB, lead.id, 'scored', { segment: deterministicStrategy.segment, fit_score: fitScore });
   return getLead(env, lead.id);
@@ -69,9 +71,10 @@ export async function draftLead(env: Env, lead: LeadRow, opts?: { force?: boolea
   }
   const plan = buildPersonalizationPlan(lead);
   const nextStepPlan = planInitialNextStep(plan.strategy);
+  const storedSegment = await compatibleLeadSegment(env.DB, plan.strategy.segment);
   await env.DB.prepare(
     `UPDATE leads SET segment = ?1, updated_at = datetime('now') WHERE id = ?2`
-  ).bind(plan.strategy.segment, lead.id).run();
+  ).bind(storedSegment, lead.id).run();
 
   const baseMessages = buildDraftMessages(plan);
   const model = await activeAiModel(env);
