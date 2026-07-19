@@ -9,7 +9,7 @@
   },
   // context/*.md files import as strings and ship inside the Worker bundle.
   // This is what keeps the project fully self-contained when the folder is copied elsewhere.
-  "rules": [{ "type": "Text", "globs": ["**/*.md"], "fallthrough": true }],
+  "rules": [{ "type": "Text", "globs": ["**/*.md", "**/*.sql"], "fallthrough": true }],
   "assets": {
     "directory": "./public",
     "binding": "ASSETS",

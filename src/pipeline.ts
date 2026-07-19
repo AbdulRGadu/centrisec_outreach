@@ -35,8 +35,8 @@ export async function scoreLead(env: Env, lead: LeadRow): Promise<LeadRow> {
 
 /**
  * Generate the one cold email draft for a lead.
- * Enforces the one-email rule: refuses when an outbound message already exists,
- * unless force is passed (which supersedes an existing draft, never a sent email's record).
+ * Enforces the one-email rule. Repeated requests return the current open draft;
+ * force supersedes an open draft, but never an approved, queued, or sent email.
  */
 export async function draftLead(env: Env, lead: LeadRow, opts?: { force?: boolean }): Promise<MessageRow> {
   const force = opts?.force ?? false;
@@ -61,7 +61,11 @@ export async function draftLead(env: Env, lead: LeadRow, opts?: { force?: boolea
     throw new HttpError(409, 'One cold email per lead: an email is already approved, queued, or sent.');
   }
   if (openDrafts.length > 0 && !force) {
-    throw new HttpError(409, 'A draft already exists for this lead. Edit it, or pass force:true to replace it.');
+    const current = await env.DB
+      .prepare('SELECT * FROM messages WHERE id = ?1')
+      .bind(openDrafts[0]?.id)
+      .first<MessageRow>();
+    if (current) return current;
   }
   const plan = buildPersonalizationPlan(lead);
   const nextStepPlan = planInitialNextStep(plan.strategy);

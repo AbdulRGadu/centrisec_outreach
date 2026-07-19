@@ -21,6 +21,7 @@ import {
 } from './replies';
 import { runScheduled } from './schedule';
 import { processSend } from './sending';
+import { ensureDraftingSchema } from './schema';
 import { handleStats } from './stats';
 import {
   handleSuppressionAdd,
@@ -146,6 +147,7 @@ export default {
         if (!(await isAuthorized(request, env))) {
           return jsonResponse({ ok: false, error: 'Unauthorized' }, 401);
         }
+        await ensureDraftingSchema(env);
         return await handleApi(request, env, url);
       }
       if (url.pathname === '/') {
@@ -165,6 +167,7 @@ export default {
   },
 
   async queue(batch, env): Promise<void> {
+    await ensureDraftingSchema(env);
     for (const msg of batch.messages) {
       try {
         if (!msg.body || msg.body.type !== 'send' || !msg.body.messageId) {
@@ -185,6 +188,9 @@ export default {
   },
 
   async scheduled(controller, env, ctx): Promise<void> {
-    ctx.waitUntil(runScheduled(controller, env));
+    ctx.waitUntil((async () => {
+      await ensureDraftingSchema(env);
+      await runScheduled(controller, env);
+    })());
   },
 } satisfies ExportedHandler<Env, SendJob>;
