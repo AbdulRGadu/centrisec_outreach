@@ -1,25 +1,16 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import type { Env } from '../src/env.ts';
 import type { LeadRow } from '../src/types.ts';
+import { validateDraftQuality } from '../src/services/draftQuality.ts';
 import {
   buildFooter,
   detectReplyOptOut,
   ensureFooter,
   latestReplyText,
   normalizeEmailBody,
-  validateDraftQuality,
 } from '../src/util/text.ts';
 
-const env = {
-  PHYSICAL_ADDRESS: 'Lagos, Nigeria',
-  VISIBLE_UNSUBSCRIBE_URL_ENABLED: 'false',
-} as Env;
-
-const lead = {
-  company: 'Prospect Limited',
-  notes: null,
-} as LeadRow;
+const lead = { company: 'Prospect Limited', notes: null } as LeadRow;
 
 test('normalizes a blob into readable plain-text paragraphs', () => {
   const result = normalizeEmailBody(
@@ -29,25 +20,28 @@ test('normalizes a blob into readable plain-text paragraphs', () => {
   assert.match(result, /\n\nWould it be useful if I sent the checklist\?\n\nBest,\nCentrisec Team$/);
 });
 
-test('removes em-dash separators, old footers, URLs, and duplicate signoffs', () => {
+test('signature is appended as HTML and the body is HTML-escaped', () => {
+  const result = ensureFooter('Hi Ada,\n\nWould <a checklist> help?');
+  assert.match(result, /<table cellpadding="0"/);
+  assert.match(result, /centrisec_fulllogo\.png/);
+  assert.match(result, /Gadu Abdul/);
+  assert.match(result, /CEO \| Centrisec Ltd/);
+  assert.match(result, /Would &lt;a checklist&gt; help\?/);
+  assert.equal(result.includes('Centrisec | Managed Cybersecurity'), false);
+});
+
+test('removes old footers and visible unsubscribe URLs before signing', () => {
   const result = ensureFooter(
-    env,
-    'Hi Ada,\n\nA short note.\n\nWould a checklist help?\n\nBest,\nCentrisec Team\nCentrisec\n\n—\nCentrisec | Managed Cybersecurity\nLagos, Nigeria\nOpt out here: https://example.com/unsubscribe?x=1',
-    'https://example.com/unsubscribe?x=1'
+    'Hi Ada,\n\nA short note.\n\nBest,\nCentrisec Team\n\nCentrisec | Managed Cybersecurity\nLagos, Nigeria\nOpt out here: https://example.com/unsubscribe?x=1'
   );
-  assert.equal((result.match(/Centrisec \| Managed Cybersecurity/g) ?? []).length, 1);
-  assert.equal((result.match(/^—$/gm) ?? []).length, 0);
-  assert.equal(result.includes('https://'), false);
-  assert.match(result, /reply “no” and we will not contact you again\./);
+  assert.equal(result.includes('Opt out here'), false);
+  assert.equal(result.includes('https://example.com/unsubscribe'), false);
+  assert.equal((result.match(/centrisec_fulllogo\.png/g) ?? []).length, 1);
 });
 
 test('removes every supported standalone separator', () => {
-  const result = normalizeEmailBody('Hi Ada,\n\n—\n--\n___\n***\nA useful note.\n\nBest,\nCentrisec Team');
-  assert.doesNotMatch(result, /^(?:—|--|___|\*\*\*)$/m);
-});
-
-test('visible URL is disabled by default', () => {
-  assert.equal(buildFooter(env, 'https://example.com/unsubscribe?x=1').includes('https://'), false);
+  const result = normalizeEmailBody('Hi Ada,\n\n\u2014\n--\n___\n***\nA useful note.\n\nBest,\nCentrisec Team');
+  assert.doesNotMatch(result, /^(?:\u2014|--|___|\*\*\*)$/m);
 });
 
 test('quality checks catch sender/prospect confusion and spam patterns', () => {
@@ -69,9 +63,11 @@ test('reply opt-out detection is deterministic but avoids broad no matches', () 
 });
 
 test('quoted system footer cannot create a false opt-out', () => {
-  const reply = latestReplyText(
-    'Yes, please send the checklist.\n\nOn Thu, 16 Jul 2026 at 10:00, Centrisec wrote:\n> If this is not relevant, reply “no”.'
-  );
+  const reply = latestReplyText('Yes, please send the checklist.\n\nOn Thu, 16 Jul 2026 at 10:00, Centrisec wrote:\n> If this is not relevant, reply \u201cno\u201d.');
   assert.equal(reply, 'Yes, please send the checklist.');
   assert.equal(detectReplyOptOut(reply), null);
+});
+
+test('signature markup is available for preview', () => {
+  assert.match(buildFooter(), /abdul\.gadu@centrisec\.com/);
 });

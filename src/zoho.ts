@@ -97,7 +97,7 @@ export interface SendMailResult {
 }
 
 /**
- * Send one plain-text email via the Zoho Mail API.
+ * Send one HTML email via the Zoho Mail API.
  * With DRY_RUN=true it logs and succeeds without touching the network -
  * used for local testing and safe production rehearsal.
  */
@@ -125,7 +125,7 @@ export async function sendMail(
         toAddress: args.to,
         subject: args.subject,
         content: args.content,
-        mailFormat: 'plaintext',
+        mailFormat: 'html',
         askReceipt: 'no',
       }),
     });

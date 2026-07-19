@@ -1,9 +1,9 @@
 import { inPlaceholders, recordEvent, recordEventStmt } from './db';
 import type { Env } from './env';
 import { HttpError, isValidEmail, jsonResponse, normalizeMultiline, normalizeText } from './http';
-import { addSuppression, loadSuppressedKeys, suppressionKeyHit, unsubTokenFor } from './suppression';
+import { addSuppression, loadSuppressedKeys, suppressionKeyHit } from './suppression';
 import type { LeadRow, MessageRow } from './types';
-import { buildFooter, domainOf, unsubscribeUrl, visibleUnsubscribeUrlEnabled } from './util/text';
+import { buildFooter, domainOf } from './util/text';
 
 const SOURCES = new Set(['csv', 'sheets', 'form', 'directory', 'linkedin', 'referral', 'manual']);
 
@@ -16,6 +16,8 @@ interface PreparedLead {
   company: string | null;
   companyWebsite: string | null;
   industry: string | null;
+  subIndustry: string | null;
+  country: string | null;
   source: string;
   notes: string | null;
 }
@@ -33,6 +35,8 @@ function prepareLead(raw: unknown): PreparedLead {
     company: normalizeText(rec.company, 160) || null,
     companyWebsite: normalizeText(rec.companyWebsite, 200) || null,
     industry: normalizeText(rec.industry, 120) || null,
+    subIndustry: normalizeText(rec.subIndustry, 120) || null,
+    country: normalizeText(rec.country, 100) || null,
     source: SOURCES.has(source) ? source : 'manual',
     notes: normalizeMultiline(rec.notes, 2000) || null,
   };
@@ -93,8 +97,10 @@ export async function handleLeadsPost(body: Record<string, unknown>, env: Env): 
     stmts.push(
       env.DB
         .prepare(
-          `INSERT INTO leads (id, email, domain, first_name, last_name, role, company, company_website, industry, source, notes)
-           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)`
+          `INSERT INTO leads (
+             id, email, domain, first_name, last_name, role, company, company_website,
+             industry, sub_industry, country, source, notes
+           ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)`
         )
         .bind(
           id,
@@ -106,6 +112,8 @@ export async function handleLeadsPost(body: Record<string, unknown>, env: Env): 
           p.company,
           p.companyWebsite,
           p.industry,
+          p.subIndustry,
+          p.country,
           p.source,
           p.notes
         )
@@ -180,12 +188,7 @@ export async function handleLeadGet(id: string, env: Env): Promise<Response> {
     .prepare('SELECT event, detail, created_at FROM lead_events WHERE lead_id = ?1 ORDER BY id DESC LIMIT 100')
     .bind(id)
     .all();
-  let visibleUrl: string | undefined;
-  if (visibleUnsubscribeUrlEnabled(env)) {
-    const token = await unsubTokenFor(env, lead.id);
-    visibleUrl = unsubscribeUrl(env, lead.id, token);
-  }
-  const footerPreview = buildFooter(env, visibleUrl);
+  const footerPreview = buildFooter();
   return jsonResponse({
     ok: true,
     lead,
@@ -225,12 +228,16 @@ export async function handleLeadPatch(id: string, body: Record<string, unknown>,
     await recordEvent(env.DB, id, 'status_changed', { to: 'scored', by: 'manual_reactivate' });
   } else if (action === 'create_demo_task') {
     await updateSalesAction(env, id, 'meeting_requested', 'demo_task_created', 'ask_availability', action);
+  } else if (action === 'mark_demo_interested') {
+    await updateSalesAction(env, id, 'meeting_requested', 'demo_interested', 'create_demo_task', action);
   } else if (action === 'draft_reply') {
     await updateSalesAction(env, id, lead.status, 'reply_draft_ready', lead.next_action ?? 'manual_review', action);
   } else if (action === 'mark_sales_qualified') {
     await updateSalesAction(env, id, 'replied_positive', 'sales_qualified', 'book_demo', action);
   } else if (action === 'add_second_batch') {
     await updateSalesAction(env, id, lead.status, 'second_batch_selected', 'manual_review', action);
+  } else if (action === 'mark_not_interested') {
+    await updateSalesAction(env, id, 'not_interested', 'do_not_contact', 'do_not_contact', action);
   } else if (action === 'suppress') {
     await addSuppression(env.DB, 'email', lead.email, 'manual');
     await updateSalesAction(env, id, 'suppressed', 'do_not_contact', 'suppress', action);

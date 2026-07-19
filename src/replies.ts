@@ -1,30 +1,27 @@
 import { runJson } from './ai/client';
 import { activeAiModel } from './ai/models';
-import { buildClassifyMessages, buildSuggestedReplyMessages, PROMPT_VERSION } from './ai/prompts';
+import { buildClassifyMessages, PROMPT_VERSION } from './ai/prompts';
 import {
+  type Classification,
   classifyJsonSchema,
   classifyResult,
   POSITIVE_CLASSIFICATIONS,
-  suggestedReplyJsonSchema,
-  suggestedReplyResult,
 } from './ai/schemas';
 import { safeEqualStrings } from './auth';
 import { recordEvent } from './db';
 import type { Env } from './env';
 import { HttpError, isValidEmail, jsonResponse, normalizeMultiline, normalizeText } from './http';
+import {
+  nextActionFor,
+  planReply,
+  salesStageFor,
+  type ReplyNextAction,
+} from './services/nextStepPlanner';
 import { addSuppression, isSuppressed } from './suppression';
 import type { LeadRow, MessageRow, ReplyMatchStatus } from './types';
-import { detectReplyOptOut, domainOf, latestReplyText, looksLikeHardBounce, normalizeEmailBody } from './util/text';
+import { detectReplyOptOut, domainOf, latestReplyText, looksLikeHardBounce } from './util/text';
 
-type ReplyNextAction =
-  | 'book_demo'
-  | 'send_checklist'
-  | 'send_info'
-  | 'ask_availability'
-  | 'create_new_referred_lead'
-  | 'suppress'
-  | 'ignore'
-  | 'manual_review';
+export { nextActionFor } from './services/nextStepPlanner';
 
 interface ReplyPayload {
   fromEmail: string;
@@ -42,21 +39,6 @@ interface MatchResult {
   lead: LeadRow | null;
   outbound: MessageRow | null;
   status: ReplyMatchStatus;
-}
-
-export function nextActionFor(classification: string): ReplyNextAction {
-  switch (classification) {
-    case 'positive_interest': return 'send_checklist';
-    case 'meeting_request': return 'ask_availability';
-    case 'asks_for_more_info': return 'send_info';
-    case 'referral_to_colleague': return 'create_new_referred_lead';
-    case 'not_interested':
-    case 'remove_me': return 'suppress';
-    case 'not_now':
-    case 'out_of_office':
-    case 'bounce_or_auto_reply': return 'ignore';
-    default: return 'manual_review';
-  }
 }
 
 function parsePayload(body: Record<string, unknown>): ReplyPayload {
@@ -213,6 +195,7 @@ function replyEnvelope(lead: LeadRow | null, message: MessageRow, duplicate: boo
     confidence: message.confidence ?? 0,
     summary: message.summary ?? '',
     next_action: message.next_action ?? nextActionFor(classification),
+    sales_stage: salesStageFor(classification),
     isPositive: POSITIVE_CLASSIFICATIONS.has(classification),
     suggested_reply: message.suggested_reply ?? null,
     suggestedReply: message.suggested_reply ?? null,
@@ -270,7 +253,7 @@ async function processReply(body: Record<string, unknown>, env: Env, logId: stri
 
     const match = await matchReply(env, payload);
     const replyText = latestReplyText(payload.body) || payload.body;
-    let classification = 'unclear';
+    let classification: Classification = 'unclear';
     let confidence = 0;
     let summary = match.lead ? 'AI classification unavailable; review manually.' : 'Reply could not be matched; review manually.';
     let model = env.DEFAULT_AI_MODEL;
@@ -307,14 +290,21 @@ async function processReply(body: Record<string, unknown>, env: Env, logId: stri
       }
     }
 
-    const nextAction = nextActionFor(classification);
+    const replyPlan = planReply({
+      classification,
+      confidence,
+      summary,
+      lead: match.lead,
+      replyBody: replyText,
+    });
+    const nextAction = replyPlan.next_action;
     const inboundId = crypto.randomUUID();
     await env.DB.prepare(
       `INSERT INTO messages
          (id, lead_id, direction, status, subject, body, from_email, to_email,
-          classification, confidence, summary, ai_model, prompt_version, zoho_message_id,
-          next_action, received_at, error)
-       VALUES (?1, ?2, 'inbound', 'received', ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)`
+          classification, confidence, summary, suggested_reply, ai_model, prompt_version,
+          zoho_message_id, next_action, received_at, error)
+       VALUES (?1, ?2, 'inbound', 'received', ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)`
     ).bind(
       inboundId,
       match.lead?.id ?? null,
@@ -325,6 +315,7 @@ async function processReply(body: Record<string, unknown>, env: Env, logId: stri
       classification,
       confidence,
       summary,
+      replyPlan.suggested_reply || null,
       model,
       PROMPT_VERSION,
       payload.messageId,
@@ -345,27 +336,6 @@ async function processReply(body: Record<string, unknown>, env: Env, logId: stri
 
     if (match.lead) {
       await applyReplyOutcome(env, match.lead, inboundId, classification, nextAction, replyText, optOut);
-      if (POSITIVE_CLASSIFICATIONS.has(classification)) {
-        try {
-          const suggestion = await runJson(
-            env,
-            model,
-            buildSuggestedReplyMessages(env, { lead: match.lead, classification, replyBody: replyText }),
-            suggestedReplyJsonSchema,
-            suggestedReplyResult,
-            { maxTokens: 800 }
-          );
-          const suggestedReply = normalizeEmailBody(suggestion.reply_body);
-          await env.DB.prepare(
-            `UPDATE messages SET suggested_reply = ?1, updated_at = datetime('now') WHERE id = ?2`
-          ).bind(suggestedReply, inboundId).run();
-        } catch (error) {
-          await recordEvent(env.DB, match.lead.id, 'ai_error', { stage: 'suggest_reply' });
-          await updateIngestLog(env, logId, {
-            error: `Suggested reply failed: ${error instanceof Error ? error.message : String(error)}`.slice(0, 500),
-          });
-        }
-      }
     }
 
     const message = await env.DB.prepare('SELECT * FROM messages WHERE id = ?1').bind(inboundId).first<MessageRow>();
@@ -393,40 +363,35 @@ async function applyReplyOutcome(
   await recordEvent(env.DB, lead.id, 'classified', { message_id: messageId, classification, next_action: nextAction });
 
   let status: LeadRow['status'] = 'manual_review';
-  let salesStage = 'manual_review';
-  if (classification === 'remove_me' || classification === 'not_interested') {
+  let salesStage = salesStageFor(classification);
+  if (classification === 'remove_me') {
     await addSuppression(
       env.DB,
       'email',
       lead.email,
-      optOut === 'complaint' ? 'complaint' : classification,
+      optOut === 'complaint' ? 'complaint' : 'remove_me',
       messageId
     );
-    status = classification === 'not_interested' ? 'not_interested' : 'suppressed';
-    salesStage = 'do_not_contact';
+    status = 'suppressed';
+  } else if (classification === 'not_interested') {
+    status = 'not_interested';
   } else if (classification === 'bounce_or_auto_reply' && looksLikeHardBounce(replyBody)) {
     await addSuppression(env.DB, 'email', lead.email, 'hard_bounce', messageId);
     status = 'failed';
     salesStage = 'invalid_email';
   } else if (classification === 'positive_interest') {
     status = 'replied_positive';
-    salesStage = 'next_sales_step';
   } else if (classification === 'meeting_request') {
     status = 'meeting_requested';
-    salesStage = 'meeting_requested';
   } else if (classification === 'asks_for_more_info') {
     status = 'asked_for_more_info';
-    salesStage = 'more_info_requested';
   } else if (classification === 'referral_to_colleague') {
     status = 'referred';
-    salesStage = 'referral_received';
     await createReferredLead(env, lead, replyBody, messageId);
   } else if (classification === 'not_now') {
     status = 'not_now';
-    salesStage = 'nurture_later';
   } else if (classification === 'out_of_office' || classification === 'bounce_or_auto_reply') {
     status = 'sent';
-    salesStage = 'auto_reply';
   }
 
   await env.DB.prepare(

@@ -3,9 +3,11 @@ import type { Env } from './env';
 import { HttpError, jsonResponse, normalizeMultiline, normalizeText } from './http';
 import { getLead } from './leads';
 import { processSend } from './sending';
+import { validateDraftQuality } from './services/draftQuality';
+import { normalizeDraftSubject, renderDraftEmail } from './services/emailRenderer';
+import { buildPersonalizationPlan } from './services/personalization';
 import { isSuppressed } from './suppression';
 import type { LeadRow, MessageRow } from './types';
-import { normalizeEmailBody, validateDraftQuality } from './util/text';
 
 export async function getMessage(env: Env, id: string): Promise<MessageRow> {
   const row = await env.DB.prepare('SELECT * FROM messages WHERE id = ?1').bind(id).first<MessageRow>();
@@ -32,7 +34,9 @@ export async function handleMessagesList(url: URL, env: Env): Promise<Response> 
     .prepare(
       `SELECT m.*, l.company AS lead_company, l.first_name AS lead_first_name,
               l.last_name AS lead_last_name, l.email AS lead_email,
-              l.segment AS lead_segment, l.fit_score AS lead_fit_score
+              l.segment AS lead_segment, l.fit_score AS lead_fit_score,
+              l.role AS lead_role, l.industry AS lead_industry,
+              l.sub_industry AS lead_sub_industry
        FROM messages m LEFT JOIN leads l ON l.id = m.lead_id
        WHERE ${where.join(' AND ')}
        ORDER BY m.updated_at DESC
@@ -48,18 +52,27 @@ export async function handleMessagePatch(id: string, body: Record<string, unknow
   if (message.direction !== 'outbound' || !['draft', 'needs_review'].includes(message.status)) {
     throw new HttpError(409, 'Only drafts can be edited');
   }
-  const subject = typeof body.subject === 'string' ? normalizeText(body.subject, 150) : null;
-  const newBody = typeof body.body === 'string' ? normalizeEmailBody(normalizeMultiline(body.body, 5000)) : null;
+  const subject = typeof body.subject === 'string' ? normalizeDraftSubject(normalizeText(body.subject, 150)) : null;
+  const lead = message.lead_id ? await getLead(env, message.lead_id) : null;
+  const newBody = typeof body.body === 'string' && lead
+    ? renderDraftEmail(normalizeMultiline(body.body, 5000), lead)
+    : typeof body.body === 'string' ? normalizeMultiline(body.body, 5000) : null;
   if (subject === null && newBody === null) throw new HttpError(400, 'Provide subject and/or body');
   if (subject !== null && subject.length < 3) throw new HttpError(400, 'Subject is too short');
   if (newBody !== null && newBody.length < 40) throw new HttpError(400, 'Body is too short');
 
-  const lead = message.lead_id ? await getLead(env, message.lead_id) : null;
   const finalSubject = subject ?? message.subject ?? '';
   const finalBody = newBody ?? message.body ?? '';
+  const strategy = lead ? buildPersonalizationPlan(lead).strategy : null;
   const quality = lead
-    ? validateDraftQuality(finalSubject, finalBody, lead)
-    : { valid: false, warnings: ['Draft has no lead.'] };
+    ? validateDraftQuality(
+        finalSubject,
+        finalBody,
+        lead,
+        strategy ?? undefined,
+        typeof body.body === 'string' ? normalizeMultiline(body.body, 5000) : finalBody
+      )
+    : { valid: false, status: 'needs_review' as const, warnings: ['Draft has no lead.'], word_count: 0, question_count: 0 };
   const nextStatus = quality.valid ? 'draft' : 'needs_review';
   const warning = quality.valid ? null : `Draft quality warning: ${quality.warnings.join(' ')}`.slice(0, 500);
 
@@ -70,10 +83,12 @@ export async function handleMessagePatch(id: string, body: Record<string, unknow
          body = COALESCE(?2, body),
          status = ?3,
          error = ?4,
+         draft_quality_status = ?5,
+         validation_warnings = ?6,
          updated_at = datetime('now')
-       WHERE id = ?5 AND status IN ('draft','needs_review')`
+       WHERE id = ?7 AND status IN ('draft','needs_review')`
     )
-    .bind(subject, newBody, nextStatus, warning, id)
+    .bind(subject, newBody, nextStatus, warning, quality.status, JSON.stringify(quality.warnings), id)
     .run();
   if (message.lead_id) {
     await recordEvent(env.DB, message.lead_id, 'draft_edited', { message_id: id });
@@ -100,6 +115,14 @@ async function assertSendable(env: Env, message: MessageRow): Promise<LeadRow> {
     .first();
   if (other) {
     throw new HttpError(409, 'One cold email per lead: another email is already queued or sent');
+  }
+  if (message.draft_quality_status === 'needs_review') {
+    throw new HttpError(409, 'Draft is marked needs_review; save an edited version that passes quality checks first');
+  }
+  const strategy = buildPersonalizationPlan(lead).strategy;
+  const quality = validateDraftQuality(message.subject ?? '', message.body ?? '', lead, strategy);
+  if (!quality.valid) {
+    throw new HttpError(409, `Draft must pass quality review before approval: ${quality.warnings.join(' ')}`);
   }
   return lead;
 }
@@ -134,7 +157,10 @@ export async function handleMessageApprove(id: string, env: Env): Promise<Respon
     // Stays 'approved'; the sweeper cron re-enqueues stragglers.
   }
   await env.DB
-    .prepare(`UPDATE leads SET status = 'queued', updated_at = datetime('now') WHERE id = ?1`)
+    .prepare(
+      `UPDATE leads SET status = 'queued', sales_stage = 'approved_to_send',
+         next_action = 'send_approved_email', updated_at = datetime('now') WHERE id = ?1`
+    )
     .bind(lead.id)
     .run();
   return jsonResponse({ ok: true, queued });
@@ -163,6 +189,21 @@ export async function handleMessageReject(id: string, body: Record<string, unkno
   return jsonResponse({ ok: true });
 }
 
+export async function handleMessageNeedsReview(id: string, env: Env): Promise<Response> {
+  const message = await getMessage(env, id);
+  if (!['draft', 'needs_review'].includes(message.status)) {
+    throw new HttpError(409, `Cannot mark a message in status '${message.status}' for review`);
+  }
+  await env.DB.prepare(
+    `UPDATE messages SET status = 'needs_review', draft_quality_status = 'needs_review',
+       error = 'Marked for manual review', updated_at = datetime('now') WHERE id = ?1`
+  ).bind(id).run();
+  if (message.lead_id) {
+    await recordEvent(env.DB, message.lead_id, 'draft_needs_review', { message_id: id, by: 'manual' });
+  }
+  return jsonResponse({ ok: true, message: await getMessage(env, id) });
+}
+
 /**
  * Synchronous send for testing and hands-on use: approve + attempt delivery now.
  * If a gate defers it (window/cap), the message is queued with a delay instead.
@@ -184,7 +225,10 @@ export async function handleSendNow(id: string, env: Env): Promise<Response> {
       .run();
     if ((claim.meta.changes ?? 0) === 0) throw new HttpError(409, 'Message changed concurrently');
     await env.DB
-      .prepare(`UPDATE leads SET status = 'queued', updated_at = datetime('now') WHERE id = ?1`)
+      .prepare(
+        `UPDATE leads SET status = 'queued', sales_stage = 'approved_to_send',
+           next_action = 'send_approved_email', updated_at = datetime('now') WHERE id = ?1`
+      )
       .bind(lead.id)
       .run();
     await recordEvent(env.DB, lead.id, 'approved', { message_id: id, via: 'send_now' });

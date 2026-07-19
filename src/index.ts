@@ -6,6 +6,7 @@ import { HttpError, jsonResponse, readJson } from './http';
 import { getLead, handleLeadGet, handleLeadPatch, handleLeadsList, handleLeadsPost } from './leads';
 import {
   handleMessageApprove,
+  handleMessageNeedsReview,
   handleMessagePatch,
   handleMessageReject,
   handleMessagesList,
@@ -78,6 +79,7 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
     if (!id && method === 'GET') return handleMessagesList(url, env);
     if (id && method === 'PATCH' && !action) return handleMessagePatch(id, await readJson(request), env);
     if (id && method === 'POST' && action === 'approve') return handleMessageApprove(id, env);
+    if (id && method === 'POST' && action === 'needs-review') return handleMessageNeedsReview(id, env);
     if (id && method === 'POST' && action === 'reject') {
       return handleMessageReject(id, await readJsonOptional(request), env);
     }

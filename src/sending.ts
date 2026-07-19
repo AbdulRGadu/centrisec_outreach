@@ -1,9 +1,9 @@
 import { recordEvent } from './db';
 import { intVar, type Env } from './env';
-import { addSuppression, isSuppressed, unsubTokenFor } from './suppression';
+import { addSuppression, isSuppressed } from './suppression';
 import type { LeadRow, MessageRow } from './types';
 import { dayString, isInSendWindow, secondsToNextWindowOpen, weekStartString } from './util/time';
-import { ensureFooter, unsubscribeUrl, visibleUnsubscribeUrlEnabled } from './util/text';
+import { ensureFooter } from './util/text';
 import { getAccessToken, sendMail, ZohoError } from './zoho';
 
 export type SendOutcome =
@@ -119,7 +119,10 @@ export async function processSend(env: Env, messageId: string): Promise<SendOutc
     await markFailed(env, messageId, `suppressed: ${suppressedReason}`);
     const leadStatus = 'suppressed';
     await env.DB
-      .prepare(`UPDATE leads SET status = ?1, updated_at = datetime('now') WHERE id = ?2`)
+      .prepare(
+        `UPDATE leads SET status = ?1, sales_stage = 'do_not_contact',
+           next_action = 'suppressed', updated_at = datetime('now') WHERE id = ?2`
+      )
       .bind(leadStatus, lead.id)
       .run();
     await recordEvent(env.DB, lead.id, 'send_blocked', { message_id: messageId, reason: suppressedReason });
@@ -181,14 +184,7 @@ export async function processSend(env: Env, messageId: string): Promise<SendOutc
     return { action: 'ack', reason: 'claimed elsewhere' };
   }
 
-  // The visible footer uses reply-based opt-out by default. The signed URL remains
-  // available internally and can be explicitly enabled through Worker config.
-  let visibleUrl: string | undefined;
-  if (visibleUnsubscribeUrlEnabled(env)) {
-    const token = await unsubTokenFor(env, lead.id);
-    visibleUrl = unsubscribeUrl(env, lead.id, token);
-  }
-  const finalBody = ensureFooter(env, message.body ?? '', visibleUrl);
+  const finalBody = ensureFooter(message.body ?? '');
   const subject = message.subject ?? 'Centrisec';
 
   try {
@@ -202,7 +198,10 @@ export async function processSend(env: Env, messageId: string): Promise<SendOutc
       .bind(finalBody, sent.internetMessageId ?? sent.providerMessageId, messageId)
       .run();
     await env.DB
-      .prepare(`UPDATE leads SET status = 'sent', updated_at = datetime('now') WHERE id = ?1`)
+      .prepare(
+        `UPDATE leads SET status = 'sent', sales_stage = 'awaiting_reply',
+           next_action = 'wait_for_reply_no_auto_follow_up', updated_at = datetime('now') WHERE id = ?1`
+      )
       .bind(lead.id)
       .run();
     await recordEvent(env.DB, lead.id, 'sent', { message_id: messageId, dry_run: sent.dryRun });
@@ -211,7 +210,10 @@ export async function processSend(env: Env, messageId: string): Promise<SendOutc
     if (err instanceof ZohoError && err.kind === 'permanent') {
       await markFailed(env, messageId, err.message);
       await env.DB
-        .prepare(`UPDATE leads SET status = 'failed', updated_at = datetime('now') WHERE id = ?1`)
+        .prepare(
+          `UPDATE leads SET status = 'failed', sales_stage = 'delivery_issue',
+             next_action = 'manual_review', updated_at = datetime('now') WHERE id = ?1`
+        )
         .bind(lead.id)
         .run();
       await addSuppression(env.DB, 'email', lead.email, 'hard_bounce', messageId);

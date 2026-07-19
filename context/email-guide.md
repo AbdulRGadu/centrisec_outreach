@@ -21,8 +21,8 @@ controlled prospecting, not a newsletter, sequence, or drip campaign.
 6. One soft question as the only CTA.
 7. Sign off once with `Best,` and `Centrisec Team`.
 
-The system adds the final identity, address, and reply-based opt-out footer. The AI must
-not add a footer or unsubscribe wording.
+The system adds the final HTML contact signature separately. The AI must not add a footer,
+contact block, link, or unsubscribe wording.
 
 ## Approved register
 
@@ -33,11 +33,11 @@ not add a footer or unsubscribe wording.
 > We help teams review practical cybersecurity areas like access control, staff awareness,
 > incident readiness, and protection of sensitive business data.
 >
-> For organisations in {{prospect_industry}}, these checks are often useful because security
-> gaps can appear across everyday systems, not just public-facing apps.
+> For organisations in {{prospect_industry}}, these checks are useful because access, shared
+> tools, sensitive data, and incident response often span several everyday systems.
 >
-> We put together a short security readiness checklist that helps teams identify common gaps
-> without starting with a heavy technical assessment.
+> We put together a short security readiness checklist that gives teams a practical starting
+> point without requiring a heavy technical assessment.
 >
 > Would it be useful if I sent it over?
 >
@@ -49,7 +49,7 @@ around missing values.
 
 ## Hard rules
 
-- Body under 140 words. Subject under 8 words.
+- Body between 80 and 140 words. Subject under 8 words.
 - Plain text with short paragraphs and readable blank lines.
 - One email, one idea, one question, one CTA.
 - Use sector-based relevance; do not invent company-specific facts.

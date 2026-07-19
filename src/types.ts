@@ -43,6 +43,7 @@ export interface LeadRow {
   company: string | null;
   company_website: string | null;
   industry: string | null;
+  sub_industry: string | null;
   segment: string | null;
   fit_score: number | null;
   fit_reason: string | null;
@@ -158,6 +159,13 @@ export interface MessageRow {
   created_at: string;
   updated_at: string;
   sent_at: string | null;
+  buyer_persona: string | null;
+  security_context: string | null;
+  recommended_offer: string | null;
+  recommended_cta: string | null;
+  draft_quality_status: string | null;
+  validation_warnings: string | null;
+  next_step_plan: string | null;
 }
 
 export type ReplyMatchStatus =

@@ -3,12 +3,12 @@ import { z } from 'zod';
 export const SEGMENTS = [
   'fintech',
   'healthcare',
-  'school',
+  'education',
   'logistics',
   'saas',
-  'enterprise',
-  'sme',
-  'other',
+  'ecommerce',
+  'professional_services',
+  'general_business',
 ] as const;
 
 export const CLASSIFICATIONS = [
@@ -57,8 +57,8 @@ export const scoreJsonSchema = {
 // --- Email drafting ---
 
 export const draftResult = z.object({
-  subject: z.string().min(4).max(120),
-  body: z.string().min(80),
+  subject: z.string().min(1).max(120),
+  body: z.string().min(1),
 });
 export type DraftResult = z.infer<typeof draftResult>;
 
@@ -88,21 +88,6 @@ export const classifyJsonSchema = {
     summary: { type: 'string' },
   },
   required: ['classification', 'confidence', 'summary'],
-} as const;
-
-// --- Suggested reply ---
-
-export const suggestedReplyResult = z.object({
-  reply_body: z.string().min(20),
-});
-export type SuggestedReplyResult = z.infer<typeof suggestedReplyResult>;
-
-export const suggestedReplyJsonSchema = {
-  type: 'object',
-  properties: {
-    reply_body: { type: 'string' },
-  },
-  required: ['reply_body'],
 } as const;
 
 // --- Discovery research structuring ---

@@ -1,15 +1,27 @@
 import type { Env } from '../env';
-import type { LeadRow } from '../types';
 
 const SYSTEM_FOOTER_HEADING = 'Centrisec | Managed Cybersecurity';
-const REPLY_OPT_OUT = 'If this is not relevant, reply \u201cno\u201d and we will not contact you again.';
 const SIGNOFF_PATTERN = /^(best|best regards|regards|kind regards|thanks|thank you),?$/i;
 const GREETING_PATTERN = /^(hi|hello|dear)\b[^\n]*[,!]$/i;
 
-export interface DraftQualityResult {
-  valid: boolean;
-  warnings: string[];
-}
+const EMAIL_SIGNATURE_HTML = `<table cellpadding="0" cellspacing="0" border="0" style="font-family:Arial, Helvetica, sans-serif; color:rgb(7, 21, 39); font-size:14px; line-height:1.5">
+    <tbody>
+        <tr>
+            <td style="padding-right:18px; vertical-align:middle; border-right:2px solid rgb(242, 178, 26)">
+                <img src="https://centrisec.com/assets/centrisec_fulllogo.png" alt="Centrisec" width="150" style="display:block; width:150px; height:auto; border:0">
+            </td>
+            <td style="padding-left:18px; vertical-align:top">
+                <div style="font-size:16px; font-weight:700; color:rgb(6, 27, 58)">Gadu Abdul<br></div>
+                <div style="color:rgb(102, 112, 133); margin-bottom:6px">CEO | Centrisec Ltd<br></div>
+                <div style="font-size:13px; color:rgb(6, 27, 58); margin-bottom:8px">Cybersecurity &amp; Human Risk Management&nbsp;<br></div>
+                <div><a href="tel:+2349079887201" style="color:rgb(7, 21, 39); text-decoration:none" target="_blank">+234 907 988 7201</a><br></div>
+                <div><a href="mailto:abdul.gadu@centrisec.com" style="color:rgb(7, 21, 39); text-decoration:none" target="_blank">abdul.gadu@centrisec.com</a><br></div>
+                <div><a href="https://centrisec.com" style="color:rgb(6, 27, 58); text-decoration:none; font-weight:600" target="_blank">centrisec.com</a><br></div>
+            </td>
+        </tr>
+    </tbody>
+</table>
+<div><br></div>`;
 
 export function domainOf(email: string): string {
   const at = email.lastIndexOf('@');
@@ -18,6 +30,16 @@ export function domainOf(email: string): string {
 
 export function wordCount(text: string): number {
   return text.trim().split(/\s+/).filter(Boolean).length;
+}
+
+export function normalizeInlineText(value: unknown, maxLength = 500): string {
+  if (typeof value !== 'string') return '';
+  return value.replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, maxLength);
+}
+
+export function normalizeMultilineText(value: unknown, maxLength = 2_000): string {
+  if (typeof value !== 'string') return '';
+  return value.replace(/\r\n?/g, '\n').replace(/[ \t]+/g, ' ').trim().slice(0, maxLength);
 }
 
 export function unsubscribeUrl(env: Env, leadId: string, token: string): string {
@@ -109,58 +131,19 @@ export function normalizeEmailBody(body: string): string {
   return normalized;
 }
 
-export function buildFooter(env: Env, unsubUrl?: string): string {
-  const lines = [SYSTEM_FOOTER_HEADING, env.PHYSICAL_ADDRESS, '', REPLY_OPT_OUT];
-  if (visibleUnsubscribeUrlEnabled(env) && unsubUrl) lines.push('', `Opt out: ${unsubUrl}`);
-  return lines.join('\n');
+export function buildFooter(): string {
+  return EMAIL_SIGNATURE_HTML;
 }
 
-/** Replace any old/generated footer with the single system footer. */
-export function ensureFooter(env: Env, body: string, unsubUrl?: string): string {
+function escapeHtml(text: string): string {
+  return text.replace(/[&<>'"]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[char]!);
+}
+
+/** Convert the approved plain-text body into HTML and append the email signature. */
+export function ensureFooter(body: string): string {
   const normalized = normalizeEmailBody(body);
-  return `${normalized}\n\n${buildFooter(env, unsubUrl)}\n`;
-}
-
-function countCtas(body: string): number {
-  const questions = (body.match(/\?/g) ?? []).length;
-  const nonQuestionAsks = body
-    .split(/\n+/)
-    .filter((line) => /\b(?:let me know|reply if|schedule a|book a|send me)\b/i.test(line) && !line.includes('?')).length;
-  return questions + nonQuestionAsks;
-}
-
-export function validateDraftQuality(subject: string, body: string, lead: LeadRow): DraftQualityResult {
-  const warnings: string[] = [];
-  const normalized = body.replace(/\r\n?/g, '\n').trim();
-  const companyIsCentrisec = /^centrisec(?:\s|$)/i.test(lead.company ?? '');
-  const hasVerifiedEvidence = /verified (?:scan|evidence)|scan evidence|confirmed finding/i.test(lead.notes ?? '');
-
-  if (wordCount(subject) > 8) warnings.push('Subject is longer than 8 words.');
-  if (/since Centrisec operates/i.test(normalized) && !companyIsCentrisec) {
-    warnings.push('Centrisec is incorrectly described as the prospect.');
-  }
-  if (/https?:\/\/\S*(?:unsubscribe|opt[-_]?out)\S*/i.test(normalized)) {
-    warnings.push('A visible unsubscribe URL is present.');
-  }
-  if (/^\s*(?:\u2014|--|___|\*\*\*)\s*$/m.test(normalized)) warnings.push('A standalone separator is present.');
-  const paragraphs = normalized.split(/\n\s*\n/).filter(Boolean);
-  if (paragraphs.length === 1 && wordCount(normalized) > 45) {
-    warnings.push('The body is one large paragraph.');
-  }
-  if (wordCount(normalized) + 17 > 180) warnings.push('The body and system footer exceed 180 words.');
-  if (countCtas(normalized) > 1) warnings.push('The body contains more than one CTA.');
-  if (!hasVerifiedEvidence && /\b(?:you have|your company has|we found|we detected|is vulnerable|security gap at)\b/i.test(normalized)) {
-    warnings.push('The body claims an unverified vulnerability or finding.');
-  }
-  if (/\b(?:guaranteed|limited time|act now|urgent(?:ly)?|final chance|immediately|before it(?:'|\u2019)s too late|costly incident)\b/i.test(normalized)) {
-    warnings.push('The body contains fake urgency or spammy phrasing.');
-  }
-  const signoffs = normalized.split('\n').filter((line) => SIGNOFF_PATTERN.test(line.trim())).length;
-  if (signoffs > 1) warnings.push('The body signs off more than once.');
-  const centrisecBlocks = (normalized.match(/^Centrisec(?: Team)?$|^Centrisec \| Managed Cybersecurity$/gim) ?? []).length;
-  if (centrisecBlocks > 1) warnings.push('The body includes multiple Centrisec signature or footer blocks.');
-
-  return { valid: warnings.length === 0, warnings };
+  const htmlBody = escapeHtml(normalized).replace(/\n\n/g, '</p><p style="margin:0 0 16px">').replace(/\n/g, '<br>');
+  return `<div style="font-family:Arial, Helvetica, sans-serif; font-size:14px; line-height:1.5; color:rgb(7, 21, 39)"><p style="margin:0 0 16px">${htmlBody}</p></div><br>${buildFooter()}`;
 }
 
 /** Keep only the newly written portion of a reply, excluding common quoted-history markers. */

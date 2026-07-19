@@ -17,6 +17,7 @@
   button { font: inherit; cursor: pointer; border: 1px solid var(--line);
     background: var(--panel-2); color: var(--text); border-radius: 8px; padding: 6px 12px; }
   button:hover { border-color: var(--accent); }
+  button:active { transform: translateY(1px); }
   button.primary { background: var(--accent); border-color: var(--accent); color: #04110b; font-weight: 600; }
   button.danger { border-color: #7f1d1d; color: #fca5a5; }
   button:disabled { opacity: .5; cursor: wait; }
@@ -32,7 +33,7 @@
   .small { font-size: 12px; }
 
   /* Login */
-  #login { min-height: 100vh; display: flex; align-items: center; justify-content: center; }
+  #login { min-height: 100dvh; display: flex; align-items: center; justify-content: center; }
   #login form { background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
     padding: 28px; width: min(92vw, 380px); display: flex; flex-direction: column; gap: 12px; }
   #login h1 { margin: 0 0 4px; font-size: 18px; }
@@ -88,7 +89,7 @@
     overflow-y: auto; padding: 18px 20px; }
   .modal { position: fixed; inset: 0; z-index: 10; display: flex; align-items: center; justify-content: center; }
   .modal-box { background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
-    width: min(96vw, 720px); max-height: 92vh; overflow-y: auto; padding: 20px; }
+    width: min(96vw, 1100px); max-height: 94dvh; overflow-y: auto; padding: 20px; }
   .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
   .grow { flex: 1; }
   .kv { display: grid; grid-template-columns: 130px 1fr; gap: 4px 10px; margin: 10px 0; }
@@ -110,6 +111,20 @@
   .feedback.success { color: var(--accent-2); }
   .feedback.bad, .warning { color: var(--warn); }
   .warning { border-left: 3px solid var(--warn); padding: 7px 10px; background: rgba(245,158,11,.08); }
+  .review-grid { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(320px, .8fr); gap: 18px; }
+  .strategy-panel { border-left: 1px solid var(--line); padding-left: 18px; }
+  .email-preview { min-height: 260px; padding: 18px; background: #f8fafc; color: #172033;
+    border-color: #d7deea; font: 14px/1.65 Arial, Helvetica, sans-serif; }
+  .quality-pass { color: var(--accent-2); }
+  .warning-list { margin: 8px 0; padding-left: 20px; color: var(--warn); }
+  .warning-list li + li { margin-top: 4px; }
+  .button-stack { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 14px; }
+  .signature-frame { width: 100%; height: 190px; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
+  @media (max-width: 760px) {
+    main { padding-inline: 14px; }
+    .review-grid { grid-template-columns: 1fr; }
+    .strategy-panel { border-left: 0; border-top: 1px solid var(--line); padding: 14px 0 0; }
+  }
 </style>
 </head>
 <body>
@@ -223,6 +238,8 @@
           <input id="a-company" placeholder="Company">
           <input id="a-website" placeholder="Company website">
           <input id="a-industry" placeholder="Industry (e.g. fintech)">
+          <input id="a-sub-industry" placeholder="Sub-industry (optional)">
+          <input id="a-country" placeholder="Country">
           <select id="a-source">
             <option value="manual">manual</option><option value="referral">referral</option>
             <option value="directory">directory</option><option value="linkedin">linkedin</option>
@@ -268,7 +285,7 @@
 'use strict';
 
 const LEAD_STATUSES = ['new','scored','drafted','approved','queued','sent','replied_positive','meeting_requested','asked_for_more_info','referred','not_now','not_interested','suppressed','unmatched_reply','manual_review','failed'];
-const SEGMENTS = ['fintech','healthcare','school','logistics','saas','enterprise','sme','other'];
+const SEGMENTS = ['fintech','healthcare','education','logistics','saas','ecommerce','professional_services','general_business'];
 const CLASSIFICATIONS = ['positive_interest','meeting_request','asks_for_more_info','referral_to_colleague','not_now','not_interested','remove_me','out_of_office','bounce_or_auto_reply','unclear'];
 
 const state = {
@@ -571,20 +588,29 @@ async function loadDrafts() {
     list.replaceChildren(el('p', { class: 'empty' }, 'No drafts awaiting approval.'));
     return;
   }
-  list.replaceChildren(...data.messages.map((m) => el('div', { class: 'card' },
-    el('div', { class: 'row' },
-      el('b', {}, m.lead_company || m.lead_email || m.to_email || ''),
-      m.lead_segment ? chip(m.lead_segment, 'seg-') : null,
-      m.lead_fit_score !== null && m.lead_fit_score !== undefined ? el('span', { class: 'chip' }, 'fit ' + m.lead_fit_score) : null,
-      chip(m.status, 'st-'),
-      el('span', { class: 'muted small', style: 'margin-left:auto' }, fmtDate(m.updated_at))),
-    el('div', { class: 'small muted' }, 'To: ' + (m.to_email || '')),
-    el('div', { style: 'margin:6px 0 2px' }, el('b', {}, m.subject || '(no subject)')),
-    el('div', { class: 'muted small' }, String(m.body || '').slice(0, 180) + (String(m.body || '').length > 180 ? '…' : '')),
-    m.error ? el('p', { class: 'warning small' }, m.error) : null,
-    el('div', { class: 'row', style: 'margin-top:10px' },
-      el('button', { class: 'primary', onclick: () => openDraft(m.id) }, 'Review'))
-  )));
+  list.replaceChildren(...data.messages.map((m) => {
+    const warnings = parseJsonValue(m.validation_warnings, []);
+    return el('div', { class: 'card' },
+      el('div', { class: 'row' },
+        el('b', {}, m.lead_company || m.lead_email || m.to_email || ''),
+        m.lead_segment ? chip(m.lead_segment, 'seg-') : null,
+        m.buyer_persona ? chip(m.buyer_persona, 'persona-') : null,
+        chip(m.draft_quality_status || m.status, m.draft_quality_status === 'passed' ? 'cl-' : 'st-'),
+        el('span', { class: 'muted small', style: 'margin-left:auto' }, fmtDate(m.updated_at))),
+      el('div', { class: 'small muted' }, 'To: ' + (m.to_email || '') + (m.lead_role ? ' · ' + m.lead_role : '')),
+      el('div', { style: 'margin:6px 0 2px' }, el('b', {}, m.subject || '(no subject)')),
+      m.recommended_offer ? el('div', { class: 'small' }, 'Offer: ', el('span', { class: 'muted' }, m.recommended_offer)) : null,
+      el('div', { class: 'muted small', style: 'margin-top:4px' }, String(m.body || '').slice(0, 220) + (String(m.body || '').length > 220 ? '...' : '')),
+      warnings.length ? el('p', { class: 'warning small' }, warnings[0] + (warnings.length > 1 ? ` +${warnings.length - 1} more` : '')) : null,
+      el('div', { class: 'row', style: 'margin-top:10px' },
+        el('button', { class: 'primary', onclick: () => openDraft(m.id) }, 'Review and approve'))
+    );
+  }));
+}
+
+function parseJsonValue(json, fallback) {
+  if (!json) return fallback;
+  try { return JSON.parse(json); } catch { return fallback; }
 }
 
 async function openDraft(messageId) {
@@ -600,12 +626,20 @@ async function openDraft(messageId) {
   subject.value = m.subject || '';
   const body = el('textarea', { rows: '14' });
   body.value = m.body || '';
+  const previewSubject = el('b', {}, m.subject || '(no subject)');
+  const previewBody = el('pre', { class: 'email-preview' }, m.body || '');
   const counter = el('span', { class: 'muted small' });
+  const editor = el('div', { class: 'hidden' },
+    el('h3', {}, 'Edit subject'), subject,
+    el('h3', {}, 'Edit body'), body);
   const updateCount = () => {
     const words = body.value.trim().split(/\s+/).filter(Boolean).length;
     counter.textContent = words + ' words';
-    counter.style.color = words > 130 ? 'var(--warn)' : 'var(--muted)';
+    counter.style.color = words < 80 || words > 140 ? 'var(--warn)' : 'var(--accent-2)';
+    previewSubject.textContent = subject.value || '(no subject)';
+    previewBody.textContent = body.value;
   };
+  subject.addEventListener('input', updateCount);
   body.addEventListener('input', updateCount);
   updateCount();
 
@@ -613,54 +647,97 @@ async function openDraft(messageId) {
     btn.disabled = true;
     try { await fn(); } catch (err) { toast(err.message, true); } finally { btn.disabled = false; }
   };
+  const saveChanges = () => api('/messages/' + m.id, {
+    method: 'PATCH', body: { subject: subject.value, body: body.value },
+  });
 
-  const saveBtn = el('button', {}, 'Save');
+  const editBtn = el('button', {}, 'Edit draft');
+  const saveBtn = el('button', { class: 'hidden' }, 'Save edits');
+  editBtn.addEventListener('click', () => {
+    editor.classList.toggle('hidden');
+    saveBtn.classList.toggle('hidden');
+    editBtn.textContent = editor.classList.contains('hidden') ? 'Edit draft' : 'Hide editor';
+    if (!editor.classList.contains('hidden')) subject.focus();
+  });
   saveBtn.addEventListener('click', busy(saveBtn, async () => {
-    await api('/messages/' + m.id, { method: 'PATCH', body: { subject: subject.value, body: body.value } });
-    toast('Draft saved');
+    const result = await saveChanges();
+    toast(result.message.status === 'draft' ? 'Draft saved and quality checks passed' : 'Draft saved with review warnings');
+    closeLayer('modal');
+    await loadDrafts();
+    await openDraft(m.id);
   }));
-  const approveBtn = el('button', { class: 'primary' }, 'Approve & queue');
+
+  const approveBtn = el('button', { class: 'primary' }, 'Approve send');
   approveBtn.addEventListener('click', busy(approveBtn, async () => {
-    await api('/messages/' + m.id, { method: 'PATCH', body: { subject: subject.value, body: body.value } });
-    const r = await api('/messages/' + m.id + '/approve', { method: 'POST' });
-    toast(r.queued ? 'Queued for sending' : 'Approved - will be queued shortly');
+    await saveChanges();
+    const result = await api('/messages/' + m.id + '/approve', { method: 'POST' });
+    toast(result.queued ? 'Approved and queued for sending' : 'Approved - queue retry pending');
     closeLayer('modal');
     await Promise.all([loadDrafts(), refreshStats()]);
   }));
-  const sendBtn = el('button', {}, 'Send now');
-  sendBtn.addEventListener('click', busy(sendBtn, async () => {
-    if (!confirm('Send this email immediately (subject to window and caps)?')) return;
-    await api('/messages/' + m.id, { method: 'PATCH', body: { subject: subject.value, body: body.value } });
-    const r = await api('/messages/' + m.id + '/send-now', { method: 'POST' });
-    if (r.sent) toast(r.dryRun ? 'Sent (DRY RUN - no real email)' : 'Sent');
-    else if (r.deferred) toast('Deferred: ' + r.reason + ' - will send automatically in ~' + Math.round(r.retryInSeconds / 60) + ' min');
-    else toast(r.error || 'Not sent', true);
+
+  const regenerateBtn = el('button', {}, 'Regenerate draft');
+  regenerateBtn.addEventListener('click', busy(regenerateBtn, async () => {
+    if (!m.lead_id) throw new Error('Draft has no lead');
+    if (!confirm('Regenerate this draft? The current version will remain in the timeline as rejected.')) return;
+    const result = await api('/leads/' + m.lead_id + '/draft', { method: 'POST', body: { force: true } });
+    toast(result.message.status === 'draft' ? 'New draft passed quality checks' : 'New draft needs review');
+    closeLayer('modal');
+    await Promise.all([loadDrafts(), refreshStats()]);
+    await openDraft(result.message.id);
+  }));
+
+  const reviewBtn = el('button', {}, 'Mark needs review');
+  reviewBtn.addEventListener('click', busy(reviewBtn, async () => {
+    await api('/messages/' + m.id + '/needs-review', { method: 'POST' });
+    toast('Draft marked for manual review');
     closeLayer('modal');
     await Promise.all([loadDrafts(), refreshStats()]);
   }));
-  const rejectBtn = el('button', { class: 'danger' }, 'Reject');
-  rejectBtn.addEventListener('click', busy(rejectBtn, async () => {
-    const reason = prompt('Reason (optional)?') || '';
-    await api('/messages/' + m.id + '/reject', { method: 'POST', body: { reason } });
-    toast('Rejected');
-    closeLayer('modal');
-    await Promise.all([loadDrafts(), refreshStats()]);
-  }));
+
+  const warnings = parseJsonValue(m.validation_warnings, []);
+  const nextPlan = parseJsonValue(m.next_step_plan, null);
+  const qualityLabel = m.draft_quality_status || (m.status === 'draft' ? 'passed' : 'needs_review');
+  const strategyPanel = el('aside', { class: 'strategy-panel' },
+    el('h3', {}, 'Draft strategy'),
+    el('div', { class: 'kv' },
+      el('div', {}, 'Lead segment'), el('div', {}, m.lead_segment || 'general_business'),
+      el('div', {}, 'Buyer persona'), el('div', {}, m.buyer_persona || 'unknown'),
+      el('div', {}, 'Recommended offer'), el('div', {}, m.recommended_offer || 'Not available'),
+      el('div', {}, 'Recommended CTA'), el('div', {}, m.recommended_cta || 'Not available'),
+      el('div', {}, 'Quality status'), el('div', { class: qualityLabel === 'passed' ? 'quality-pass' : 'warning' }, qualityLabel)),
+    warnings.length
+      ? el('div', {}, el('h3', {}, 'Validation warnings'),
+        el('ul', { class: 'warning-list' }, ...warnings.slice(0, 5).map((warning) => el('li', {}, warning))))
+      : qualityLabel === 'passed'
+        ? el('p', { class: 'quality-pass small' }, 'All drafting checks passed.')
+        : el('p', { class: 'warning small' }, 'Held for manual review.'),
+    el('h3', {}, 'Next-step plan'),
+    nextPlan ? el('div', { class: 'kv' },
+      el('div', {}, 'Email goal'), el('div', {}, nextPlan.email_goal || ''),
+      el('div', {}, 'Positive reply'), el('div', {}, nextPlan.on_positive_reply || ''),
+      el('div', {}, 'No reply'), el('div', {}, nextPlan.on_no_reply || ''),
+      el('div', {}, 'Approval'), el('div', {}, nextPlan.human_approval_required ? 'Human required' : 'Not specified')) :
+      el('p', { class: 'muted small' }, m.next_action || 'No next-step plan saved.'));
 
   $('#modal-content').replaceChildren(
     el('div', { class: 'row' },
       el('h2', { class: 'grow', style: 'margin:0' }, 'Review draft'),
-      el('button', { onclick: () => closeLayer('modal') }, '✕')),
+      el('button', { onclick: () => closeLayer('modal') }, 'Close')),
     el('p', { class: 'muted small', style: 'margin:6px 0 12px' },
       'To ' + (m.to_email || '') + (m.lead_company ? ' · ' + m.lead_company : '') + (m.lead_segment ? ' · ' + m.lead_segment : '')),
-    m.error ? el('p', { class: 'warning' }, m.error) : null,
-    el('h3', {}, 'Subject'),
-    subject,
-    el('div', { class: 'row', style: 'margin:10px 0 4px' }, el('h3', { class: 'grow', style: 'margin:0' }, 'Body'), counter),
-    body,
-    el('h3', {}, 'Footer (appended automatically at send; reply-based opt-out)'),
-    el('pre', {}, footer || '(footer preview unavailable)'),
-    el('div', { class: 'row', style: 'margin-top:14px' }, approveBtn, sendBtn, saveBtn, el('span', { class: 'grow' }), rejectBtn)
+    el('div', { class: 'review-grid' },
+      el('section', {},
+        el('h3', {}, 'Generated email preview'),
+        el('div', { class: 'row', style: 'margin-bottom:8px' }, previewSubject, el('span', { class: 'grow' }), counter),
+        previewBody,
+        editor,
+        el('div', { class: 'button-stack' }, regenerateBtn, editBtn, saveBtn, approveBtn, reviewBtn)),
+      strategyPanel),
+    el('h3', {}, 'HTML signature (appended automatically at send)'),
+    footer
+      ? el('iframe', { class: 'signature-frame', title: 'System HTML signature preview', srcdoc: footer, sandbox: '' })
+      : el('p', { class: 'muted small' }, '(signature preview unavailable)')
   );
   $('#modal-wrap').classList.remove('hidden');
 }
@@ -689,7 +766,9 @@ async function loadReplies() {
       el('span', { class: 'muted small', style: 'margin-left:auto' }, fmtDate(r.created_at))),
     el('div', { class: 'muted small' }, 'From: ' + (r.from_email || '') +
       (r.lead_first_name || r.lead_last_name ? ' (' + [r.lead_first_name, r.lead_last_name].filter(Boolean).join(' ') + ')' : '')),
-    el('div', { class: 'muted small' }, 'Match: ' + (r.match_status || 'unmatched') + ' · Next action: ' + (r.next_action || 'manual_review')),
+    el('div', { class: 'muted small' }, 'Match: ' + (r.match_status || 'unmatched') +
+      ' · Next action: ' + (r.next_action || 'manual_review') +
+      ' · Sales stage: ' + (r.lead_sales_stage || r.sales_stage || 'manual_review')),
     r.summary ? el('div', { style: 'margin:6px 0' }, r.summary) : null,
     r.original_body ? el('details', {}, el('summary', { class: 'muted small' }, 'Original email'),
       r.original_subject ? el('div', { class: 'small' }, el('b', {}, r.original_subject)) : null,
@@ -703,15 +782,12 @@ async function loadReplies() {
         catch { toast('Copy failed', true); }
       } }, 'Copy reply')) : null,
     r.lead_id ? el('div', { class: 'row', style: 'margin-top:8px' },
-      el('button', { onclick: () => openLead(r.lead_id) }, 'Open lead')) : null
+      el('button', { onclick: () => openLead(r.lead_id) }, 'Open lead')) : null,
+    r.lead_id ? replyActionButtons(r) : null
   )));
 }
 
 function nextStepCard(r) {
-  const run = (label, action) => el('button', { onclick: async () => {
-    if (!r.lead_id) return;
-    await replyAction(r.lead_id, action, label);
-  } }, label);
   return el('div', { class: 'card' },
     el('div', { class: 'row' },
       el('b', {}, [r.lead_first_name, r.lead_last_name].filter(Boolean).join(' ') || r.from_email || 'Unknown contact'),
@@ -720,17 +796,27 @@ function nextStepCard(r) {
     el('p', {}, r.summary || 'No summary available.'),
     el('div', { class: 'kv' },
       el('div', {}, 'Recommended action'), el('div', {}, r.next_action || 'manual_review'),
+      el('div', {}, 'Sales stage'), el('div', {}, r.lead_sales_stage || r.sales_stage || 'manual_review'),
+      el('div', {}, 'Confidence'), el('div', {}, Math.round((r.confidence || 0) * 100) + '%'),
       el('div', {}, 'Original email'), el('div', {}, r.original_subject || 'Unavailable')),
     r.original_body ? el('details', {}, el('summary', {}, 'Read original email'), el('pre', {}, r.original_body)) : null,
     r.suggested_reply ? el('details', {}, el('summary', {}, 'Suggested reply'), el('pre', {}, r.suggested_reply)) : null,
-    r.lead_id ? el('div', { class: 'row', style: 'margin-top:10px' },
-      run('Create demo task', 'create_demo_task'),
-      run('Draft reply', 'draft_reply'),
-      run('Mark as sales qualified', 'mark_sales_qualified'),
-      run('Add to second batch', 'add_second_batch'),
-      run('Suppress', 'suppress'),
-      run('Manual review', 'manual_review')) :
+    r.lead_id ? replyActionButtons(r) :
       el('p', { class: 'warning' }, 'Unmatched reply: review manually; it was stored and not dropped.'));
+}
+
+function replyActionButtons(r) {
+  const run = (label, action, confirmMessage = '') => el('button', { onclick: async () => {
+    if (!r.lead_id) return;
+    if (confirmMessage && !confirm(confirmMessage)) return;
+    await replyAction(r.lead_id, action, label);
+  } }, label);
+  return el('div', { class: 'row', style: 'margin-top:10px' },
+    run('Draft reply', 'draft_reply'),
+    run('Mark as demo interested', 'mark_demo_interested'),
+    run('Add to second batch', 'add_second_batch'),
+    run('Mark not interested', 'mark_not_interested', 'Mark this lead as not interested and stop future outreach?'),
+    run('Suppress', 'suppress', 'Suppress this email address immediately?'));
 }
 
 async function replyAction(leadId, action, label) {
@@ -877,6 +963,8 @@ $('#a-save').addEventListener('click', async () => {
       company: $('#a-company').value.trim(),
       companyWebsite: $('#a-website').value.trim(),
       industry: $('#a-industry').value.trim(),
+      subIndustry: $('#a-sub-industry').value.trim(),
+      country: $('#a-country').value.trim(),
       source: $('#a-source').value,
       notes: $('#a-notes').value.trim(),
     };
@@ -885,7 +973,7 @@ $('#a-save').addEventListener('click', async () => {
     const row = r.results[0];
     $('#a-result').textContent = row.result + (row.domainExists ? ' (another contact at this domain exists)' : '');
     if (row.result === 'inserted') {
-      ['#a-email','#a-first','#a-last','#a-role','#a-company','#a-website','#a-industry','#a-notes'].forEach((s) => { $(s).value = ''; });
+      ['#a-email','#a-first','#a-last','#a-role','#a-company','#a-website','#a-industry','#a-sub-industry','#a-country','#a-notes'].forEach((s) => { $(s).value = ''; });
       toast('Lead added');
       await refreshStats();
     } else {

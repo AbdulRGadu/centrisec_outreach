@@ -1,81 +1,59 @@
 # Centrisec — Segment Playbook
 
-One section per segment. When drafting, use the recipient's segment to pick the systems
-you name, the gap you highlight, and the angle you lead with. Name 2-3 systems that are
-real for their world — this is what makes the email feel written for them.
-
-Common overlooked gaps (true across every segment — pick the one or two most relevant):
-excessive user access, weak authentication practices, low employee awareness, and no clear
-process for responding when something goes wrong.
+Use the prospect's real segment to choose one practical security context. These are likely
+sector patterns, never proof that an individual prospect has a vulnerability or control gap.
 
 ## fintech
 
-- Systems that carry risk: customer financial data, payment and transaction platforms,
-  core banking/ledger integrations, KYC records, mobile apps and public APIs.
-- Regulatory drivers: NDPA/NDPR obligations, CBN expectations, partner and processor due
-  diligence, ISO 27001 asked for in enterprise deals.
-- Angle: regulators, banking partners, and enterprise customers increasingly ask fintechs
-  for evidence of security controls — not promises. Being able to show validated controls
-  and audit-ready documentation wins deals and shortens due diligence.
+- Relevant systems: customer financial data, transaction workflows, KYC records, access
+  controls, mobile applications, and incident response processes.
+- Safe angle: security readiness supports customer trust, partner diligence, and dependable
+  transaction operations.
 
 ## healthcare
 
-- Systems that carry risk: patient records and EMR systems, lab and diagnostic platforms,
-  billing systems, staff email accounts with sensitive correspondence.
-- Regulatory drivers: NDPA/NDPR — health data is among the most sensitive personal data;
-  breach consequences are reputational as much as regulatory.
-- Angle: patient trust is the asset. A clinic or hospital rarely has a security team, yet
-  holds data attackers value highly. Managed, low-burden security fits here.
+- Relevant systems: patient records, clinical platforms, staff accounts, billing systems,
+  and service-continuity processes.
+- Safe angle: practical controls around patient data and staff access support trusted,
+  dependable care delivery.
 
-## school
+## education
 
-- Systems that carry risk: student records and results portals, parent communication
-  platforms, fee/payment systems, staff accounts, shared computer labs.
-- Regulatory drivers: NDPA/NDPR applies to children's data with heightened sensitivity;
-  parents and boards expect stewardship.
-- Angle: schools run on small IT teams (often one person) while holding data about minors.
-  Practical protection and awareness for staff beats enterprise complexity.
+- Relevant systems: student records, results portals, payment records, staff accounts,
+  shared devices, and parent communication platforms.
+- Safe angle: staff awareness and access hygiene are useful starting points for teams that
+  manage student data across shared systems.
 
 ## logistics
 
-- Systems that carry risk: fleet and shipment tracking platforms, warehouse and inventory
-  systems, customer manifests, driver/partner apps, operations that cannot afford downtime.
-- Regulatory drivers: client contracts increasingly include security requirements; NDPA
-  applies to customer and employee data.
-- Angle: in logistics, a security incident is an operations outage — trucks idle, shipments
-  unbooked. Continuity is the selling point, not compliance paperwork.
+- Relevant systems: fleet and shipment platforms, warehouse tools, customer manifests,
+  staff accounts, partner applications, and operational uptime.
+- Safe angle: access and incident readiness support dependable daily operations.
 
 ## saas
 
-- Systems that carry risk: production cloud environments, customer data stores, admin
-  panels, CI/CD pipelines, public APIs, staff SSO accounts.
-- Regulatory drivers: enterprise customers demand security questionnaires, SOC-style
-  evidence, ISO 27001; NDPA for Nigerian customer data.
-- Angle: security posture is a sales blocker for SaaS — enterprise deals stall on the
-  security review. Validated controls and clean evidence unblock revenue.
+- Relevant systems: cloud environments, customer data, admin panels, public APIs, CI/CD,
+  user accounts, and staff SSO.
+- Safe angle: clear access, account, and incident-readiness checks can support customer
+  security reviews without assuming the prospect has a problem.
 
-## enterprise
+## ecommerce
 
-- Systems that carry risk: ERP and finance applications, HR management portals, employee
-  accounts at scale, customer databases, branch networks, cloud platforms, third-party
-  integrations.
-- Regulatory drivers: NDPA/NDPR, ISO 27001, sector regulators, board-level risk reporting.
-- Angle: the board and auditors want risk stated plainly and evidence produced on demand.
-  Executive-grade reporting on human and technical risk is the differentiator here.
+- Relevant systems: storefront administration, customer data, payment workflows, staff
+  accounts, fulfilment tools, and third-party integrations.
+- Safe angle: account security and customer-data handling are practical readiness areas for
+  teams coordinating sales and fulfilment across several tools.
 
-## sme
+## professional_services
 
-- Systems that carry risk: business email accounts, accounting and invoicing software,
-  customer records, shared drives and cloud storage, POS or payment tools.
-- Regulatory drivers: NDPA applies regardless of size; larger customers pass security
-  requirements down the supply chain.
-- Angle: SMEs are targeted because attackers assume no one is watching — and usually no
-  one is. Fully-managed security means protection without hiring a security team.
+- Relevant systems: client files, email accounts, shared documents, staff devices, billing
+  records, and collaboration tools.
+- Safe angle: practical checks around account access and sensitive client information are
+  useful without requiring a complex assessment.
 
-## other / unknown industry
+## general_business
 
-- Systems that carry risk (safe generic set): HR management portals, employee accounts,
-  customer databases, financial applications, and cloud platforms.
-- Angle: whatever the industry, daily operations depend on a handful of systems where
-  security gaps quietly develop. Start from the overlooked gaps (access, authentication,
-  awareness, response process) and the readiness checklist offer.
+- Relevant systems: business email, employee accounts, customer records, shared drives,
+  payment tools, cloud applications, and incident-response contacts.
+- Safe angle: a general security readiness checklist gives a growing team a low-friction
+  starting point without making assumptions about its current controls.
