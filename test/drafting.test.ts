@@ -4,6 +4,7 @@ import test from 'node:test';
 import { z } from 'zod';
 import { runJson } from '../src/ai/client.ts';
 import type { Env } from '../src/env.ts';
+import { formatD1ExecScript } from '../src/util/sql.ts';
 import { validateDraftQuality } from '../src/services/draftQuality.ts';
 import { renderDraftEmail } from '../src/services/emailRenderer.ts';
 import { buildPersonalizationPlan } from '../src/services/personalization.ts';
@@ -162,4 +163,8 @@ test('runtime schema convergence covers imported lead and reply fields', () => {
   assert.match(migration, /'replied_positive'/);
   assert.match(migration, /'needs_review'/);
   assert.match(migration, /messages_v7_backup/);
+  const executable = formatD1ExecScript(migration);
+  assert.ok(executable.split('\n').every((statement) => statement.endsWith(';')));
+  assert.doesNotMatch(executable, /--/);
+  assert.doesNotMatch(executable, /CREATE TABLE leads_v7 \(\n/);
 });

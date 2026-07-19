@@ -1,6 +1,7 @@
 import type { Env } from './env';
 import type { ProspectSegment } from './services/leadSegmentation';
 import schemaConvergenceMigration from '../migrations/0007_production_schema_convergence.sql';
+import { formatD1ExecScript } from './util/sql';
 
 const MIGRATION_ID = 7;
 const MIGRATION_NAME = '0007_production_schema_convergence.sql';
@@ -106,10 +107,10 @@ async function applyRequiredSchema(env: Env): Promise<void> {
       await ensureColumn(env.DB, table as keyof typeof REQUIRED_COLUMNS, name, definition);
     }
   }
-  await env.DB.exec(REPLY_INGEST_SCHEMA);
+  await env.DB.exec(formatD1ExecScript(REPLY_INGEST_SCHEMA));
   if (!(await schemaIsReady(env.DB))) {
     try {
-      await env.DB.exec(schemaConvergenceMigration);
+      await env.DB.exec(formatD1ExecScript(schemaConvergenceMigration));
     } catch (error) {
       // Concurrent isolates can race while converging the same legacy schema.
       if (!(await schemaIsReady(env.DB))) throw error;
