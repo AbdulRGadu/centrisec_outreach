@@ -6,8 +6,7 @@ import { recordEvent } from './db';
 import { intVar, type Env } from './env';
 import { HttpError } from './http';
 import { getLead } from './leads';
-import { validateDraftQuality } from './services/draftQuality';
-import { normalizeDraftSubject, renderDraftEmail } from './services/emailRenderer';
+import { improveDraftUntilSendable, type DraftAutomationResult } from './services/draftAutomation';
 import { segmentLeadRow } from './services/leadSegmentation';
 import { planInitialNextStep } from './services/nextStepPlanner';
 import { buildPersonalizationPlan } from './services/personalization';
@@ -15,6 +14,22 @@ import { compatibleLeadSegment } from './schema';
 import { isSuppressed } from './suppression';
 import type { LeadRow, MessageRow } from './types';
 import { wordCount } from './util/text';
+
+function nextStepWithQuality(
+  nextStepPlan: ReturnType<typeof planInitialNextStep>,
+  automation: DraftAutomationResult
+): Record<string, unknown> {
+  return {
+    ...nextStepPlan,
+    draft_automation: {
+      auto_repaired: automation.auto_repaired,
+      repair_attempts: automation.repair_attempts,
+      repair_failures: automation.repair_failures,
+      used_fallback: automation.used_fallback,
+    },
+    quality_checklist: automation.quality.checks,
+  };
+}
 
 export async function scoreLead(env: Env, lead: LeadRow): Promise<LeadRow> {
   const deterministicStrategy = segmentLeadRow(lead);
@@ -78,30 +93,33 @@ export async function draftLead(env: Env, lead: LeadRow, opts?: { force?: boolea
 
   const baseMessages = buildDraftMessages(plan);
   const model = await activeAiModel(env);
-  let result = await runJson(env, model, baseMessages, draftJsonSchema, draftResult, {
-    maxTokens: 1200,
-  });
-  let normalizedSubject = normalizeDraftSubject(result.subject);
-  let normalizedBody = renderDraftEmail(result.body, lead);
-  let quality = validateDraftQuality(normalizedSubject, normalizedBody, lead, plan.strategy, result.body);
-  if (!quality.valid) {
-    const corrective = buildDraftRepairMessages({
-      baseMessages,
-      failedDraft: { subject: normalizedSubject, body: normalizedBody },
-      warnings: quality.warnings,
-      plan,
+  let initialDraft = { subject: '', body: '' };
+  try {
+    initialDraft = await runJson(env, model, baseMessages, draftJsonSchema, draftResult, {
+      maxTokens: 1200,
     });
-    try {
-      result = await runJson(env, model, corrective, draftJsonSchema, draftResult, {
-        maxTokens: 1200,
-      });
-      normalizedSubject = normalizeDraftSubject(result.subject);
-      normalizedBody = renderDraftEmail(result.body, lead);
-      quality = validateDraftQuality(normalizedSubject, normalizedBody, lead, plan.strategy, result.body);
-    } catch {
-      // Keep the first result as needs_review; a human can safely edit or reject it.
-    }
+  } catch {
+    // The bounded repair flow retries the model, then produces a validated safe fallback.
   }
+  const automation = await improveDraftUntilSendable({
+    lead,
+    plan,
+    initialDraft,
+    repair: async ({ failedDraft, warnings, attempt }) => {
+      const corrective = buildDraftRepairMessages({
+        baseMessages,
+        failedDraft,
+        warnings,
+        plan,
+        attempt,
+      });
+      return runJson(env, model, corrective, draftJsonSchema, draftResult, { maxTokens: 1200 });
+    },
+  });
+  const normalizedSubject = automation.subject;
+  const normalizedBody = automation.body;
+  const quality = automation.quality;
+  const savedNextStepPlan = nextStepWithQuality(nextStepPlan, automation);
 
   const status = quality.valid ? 'draft' : 'needs_review';
   const warning = quality.valid ? null : `Draft quality warning: ${quality.warnings.join(' ')}`.slice(0, 500);
@@ -146,7 +164,7 @@ export async function draftLead(env: Env, lead: LeadRow, opts?: { force?: boolea
       plan.strategy.recommended_cta,
       quality.status,
       JSON.stringify(quality.warnings),
-      JSON.stringify(nextStepPlan)
+      JSON.stringify(savedNextStepPlan)
     )
     .run();
   await env.DB
@@ -165,11 +183,86 @@ export async function draftLead(env: Env, lead: LeadRow, opts?: { force?: boolea
     buyer_persona: plan.strategy.buyer_persona,
     recommended_offer: plan.strategy.recommended_offer,
     quality_warnings: quality.warnings.length,
+    auto_repaired: automation.auto_repaired,
+    repair_attempts: automation.repair_attempts,
+    repair_failures: automation.repair_failures,
+    used_fallback: automation.used_fallback,
   });
 
   const message = await env.DB.prepare('SELECT * FROM messages WHERE id = ?1').bind(id).first<MessageRow>();
   if (!message) throw new HttpError(500, 'Draft insert failed');
   return message;
+}
+
+export async function autoRepairStoredDraft(
+  env: Env,
+  message: MessageRow,
+  lead: LeadRow
+): Promise<{ message: MessageRow; automation: DraftAutomationResult }> {
+  const plan = buildPersonalizationPlan(lead);
+  const nextStepPlan = planInitialNextStep(plan.strategy);
+  const baseMessages = buildDraftMessages(plan);
+  const model = await activeAiModel(env);
+  const automation = await improveDraftUntilSendable({
+    lead,
+    plan,
+    initialDraft: { subject: message.subject ?? '', body: message.body ?? '' },
+    repair: async ({ failedDraft, warnings, attempt }) => {
+      const corrective = buildDraftRepairMessages({
+        baseMessages,
+        failedDraft,
+        warnings,
+        plan,
+        attempt,
+      });
+      return runJson(env, model, corrective, draftJsonSchema, draftResult, { maxTokens: 1200 });
+    },
+  });
+  const status = automation.quality.valid ? 'draft' : 'needs_review';
+  const warning = automation.quality.valid
+    ? null
+    : `Draft quality warning: ${automation.quality.warnings.join(' ')}`.slice(0, 500);
+
+  const update = await env.DB.prepare(
+    `UPDATE messages SET
+       status = ?1, subject = ?2, body = ?3, ai_model = ?4, prompt_version = ?5,
+       error = ?6, next_action = ?7, buyer_persona = ?8, security_context = ?9,
+       recommended_offer = ?10, recommended_cta = ?11, draft_quality_status = ?12,
+       validation_warnings = ?13, next_step_plan = ?14, updated_at = datetime('now')
+     WHERE id = ?15 AND status IN ('draft','needs_review')`
+  ).bind(
+    status,
+    automation.subject,
+    automation.body,
+    model,
+    PROMPT_VERSION,
+    warning,
+    nextStepPlan.on_positive_reply,
+    plan.strategy.buyer_persona,
+    plan.strategy.likely_security_context,
+    plan.strategy.recommended_offer,
+    plan.strategy.recommended_cta,
+    automation.quality.status,
+    JSON.stringify(automation.quality.warnings),
+    JSON.stringify(nextStepWithQuality(nextStepPlan, automation)),
+    message.id
+  ).run();
+  if ((update.meta.changes ?? 0) === 0) {
+    throw new HttpError(409, 'Draft changed while it was being repaired');
+  }
+  await recordEvent(env.DB, lead.id, 'draft_auto_repaired', {
+    message_id: message.id,
+    passed: automation.quality.valid,
+    repair_attempts: automation.repair_attempts,
+    repair_failures: automation.repair_failures,
+    used_fallback: automation.used_fallback,
+    initial_warnings: automation.initial_warnings,
+  });
+  const updated = await env.DB.prepare('SELECT * FROM messages WHERE id = ?1')
+    .bind(message.id)
+    .first<MessageRow>();
+  if (!updated) throw new HttpError(500, 'Repaired draft could not be loaded');
+  return { message: updated, automation };
 }
 
 /**

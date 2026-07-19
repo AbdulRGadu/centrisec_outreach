@@ -3,7 +3,7 @@ import type { DiscoveryCandidateRow, DiscoverySourceRow, LeadRow } from '../type
 import type { ChatMessage } from './client';
 import { scoringContext } from './context';
 
-export const PROMPT_VERSION = 'v3-conversion-drafting';
+export const PROMPT_VERSION = 'v4-auto-repair-drafting';
 
 function leadFacts(lead: LeadRow): Record<string, unknown> {
   return {
@@ -168,6 +168,7 @@ export function buildDraftRepairMessages(args: {
   failedDraft: { subject: string; body: string };
   warnings: string[];
   plan: DraftPersonalizationPlan;
+  attempt?: number;
 }): ChatMessage[] {
   return [
     ...args.baseMessages,
@@ -175,8 +176,11 @@ export function buildDraftRepairMessages(args: {
     {
       role: 'user',
       content:
-        `The draft failed mandatory quality checks:\n- ${args.warnings.join('\n- ')}\n\n` +
-        `Rewrite it once. Do not explain the changes. Use exactly seven paragraph blocks, ` +
+        `Repair pass ${args.attempt ?? 1}. The draft failed mandatory quality checks:\n- ${args.warnings.join('\n- ')}\n\n` +
+        `Rewrite the complete email and improve the failed parts. Do not explain the changes. ` +
+        `Mandatory checklist: clear subject no more than 8 words; exactly seven paragraph blocks; ` +
+        `80-140 body words; concrete practical help; supported sector relevance; one useful offer; ` +
+        `one exact recommended CTA; no invented claims, hype, footer, unsubscribe copy, or separator. ` +
         `80-140 words, the exact CTA "${args.plan.strategy.recommended_cta}", no other question, ` +
         `and the exact final signoff "Best,\\nCentrisec Team". Keep the practical help and ` +
         `sector relevance concrete. Return ONLY the JSON object.`,

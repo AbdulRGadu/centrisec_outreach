@@ -6,6 +6,7 @@ import { runJson } from '../src/ai/client.ts';
 import type { Env } from '../src/env.ts';
 import { formatD1ExecScript } from '../src/util/sql.ts';
 import { validateDraftQuality } from '../src/services/draftQuality.ts';
+import { buildSafeFallbackDraft, improveDraftUntilSendable } from '../src/services/draftAutomation.ts';
 import { renderDraftEmail } from '../src/services/emailRenderer.ts';
 import { buildPersonalizationPlan } from '../src/services/personalization.ts';
 import type { LeadRow } from '../src/types.ts';
@@ -46,6 +47,63 @@ test('a complete fintech draft passes the conversion quality gate', () => {
   assert.equal(quality.valid, true, quality.warnings.join('\n'));
   assert.ok(quality.word_count >= 80 && quality.word_count <= 140);
   assert.equal(quality.question_count, 1);
+  assert.equal(quality.checks.length, 9);
+  assert.ok(quality.checks.every((check) => check.passed));
+});
+
+test('safe automated fallback is sendable across every supported segment', () => {
+  const cases = [
+    ['Digital payments', 'CTO'],
+    ['Healthcare clinic', 'CEO'],
+    ['Education school', 'Administrator'],
+    ['Logistics delivery', 'Operations Manager'],
+    ['SaaS software platform', 'Founder'],
+    ['Ecommerce marketplace', 'IT Manager'],
+    ['Professional services consulting', 'Managing Director'],
+    ['Manufacturing', 'Office Manager'],
+  ] as const;
+  for (const [industry, role] of cases) {
+    const row = lead({ industry, sub_industry: null, role });
+    const plan = buildPersonalizationPlan(row);
+    const draft = buildSafeFallbackDraft(row, plan);
+    const quality = validateDraftQuality(draft.subject, draft.body, row, plan.strategy);
+    assert.equal(quality.valid, true, `${plan.strategy.segment}: ${quality.warnings.join(' ')}`);
+    assert.equal(quality.question_count, 1);
+  }
+});
+
+test('weak AI copy is repaired against its failed checklist', async () => {
+  const row = lead();
+  const plan = buildPersonalizationPlan(row);
+  const result = await improveDraftUntilSendable({
+    lead: row,
+    plan,
+    initialDraft: { subject: 'Security', body: 'Hi Ada,\n\nWe help companies reduce risk.' },
+    repair: async ({ warnings, attempt }) => {
+      assert.equal(attempt, 1);
+      assert.ok(warnings.length > 0);
+      return { subject: 'Practical fintech security checklist', body: validBody };
+    },
+  });
+  assert.equal(result.quality.valid, true);
+  assert.equal(result.auto_repaired, true);
+  assert.equal(result.repair_attempts, 1);
+  assert.equal(result.used_fallback, false);
+});
+
+test('persistent AI failures use a validated fallback after two bounded attempts', async () => {
+  const row = lead({ industry: 'Business services', sub_industry: null, role: 'Office Manager' });
+  const plan = buildPersonalizationPlan(row);
+  const result = await improveDraftUntilSendable({
+    lead: row,
+    plan,
+    initialDraft: { subject: '', body: '' },
+    repair: async () => { throw new Error('model unavailable'); },
+  });
+  assert.equal(result.quality.valid, true, result.quality.warnings.join(' '));
+  assert.equal(result.repair_attempts, 2);
+  assert.equal(result.repair_failures, 2);
+  assert.equal(result.used_fallback, true);
 });
 
 test('renderer fixes greeting and signoff without rewriting the message', () => {
@@ -106,6 +164,15 @@ test('draft prompt source carries structured strategy and strict repair requirem
   assert.match(promptSource, /Never write the footer/);
   assert.match(promptSource, /failed mandatory quality checks/);
   assert.match(promptSource, /exact CTA/);
+  assert.match(promptSource, /v4-auto-repair-drafting/);
+  assert.match(promptSource, /Repair pass/);
+});
+
+test('dashboard reopens automatically repaired drafts with a sendability checklist', () => {
+  const dashboard = readFileSync(new URL('../public/admin.html', import.meta.url), 'utf8');
+  assert.match(dashboard, /if \(result\.repaired\)/);
+  assert.match(dashboard, /Sendability checklist/);
+  assert.match(dashboard, /Review the updated copy, then approve again/);
 });
 
 test('Gemini is the default and model calls stay on the named AI Gateway', () => {

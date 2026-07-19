@@ -9,6 +9,13 @@ export interface DraftQualityResult {
   warnings: string[];
   word_count: number;
   question_count: number;
+  checks: DraftQualityCheck[];
+}
+
+export interface DraftQualityCheck {
+  id: string;
+  label: string;
+  passed: boolean;
 }
 
 const PRACTICAL_TERMS = /\b(?:access control|staff awareness|incident readiness|incident response|cloud security|account security|customer data|patient data|student data|client data|sensitive (?:business )?data|shared devices|security readiness)\b/i;
@@ -107,11 +114,28 @@ export function validateDraftQuality(
   }
 
   const uniqueWarnings = [...new Set(warnings)];
+  const failed = (pattern: RegExp): boolean => uniqueWarnings.some((warning) => pattern.test(warning));
+  const checks: DraftQualityCheck[] = [
+    { id: 'subject', label: 'Clear subject of eight words or fewer', passed: !failed(/^Subject /) },
+    { id: 'length', label: 'Body is between 80 and 140 words', passed: !failed(/^Body (?:is shorter|exceeds)/) },
+    { id: 'structure', label: 'Seven readable blocks with the correct greeting and sender line', passed: !failed(/seven structured|Greeting|Sender line/) },
+    { id: 'practical_help', label: 'Practical cybersecurity help is concrete', passed: !failed(/Practical help|vague filler/) },
+    { id: 'sector_relevance', label: 'Sector context matches supported lead data', passed: !failed(/Sector paragraph|prospect|startup|SaaS company/) },
+    { id: 'offer', label: 'One useful low-friction offer', passed: !failed(/Helpful offer|proposal/) },
+    { id: 'cta', label: 'One recommended soft CTA only', passed: !failed(/CTA/) },
+    { id: 'signoff', label: 'Centrisec signoff appears exactly once', passed: !failed(/Signoff|mentioned more often/) },
+    {
+      id: 'safety',
+      label: 'No invented claims, footer, hype, urgency, or unsubscribe copy',
+      passed: !failed(/unverified|unsubscribe|footer|em dash|hype|urgency/),
+    },
+  ];
   return {
     valid: uniqueWarnings.length === 0,
     status: uniqueWarnings.length === 0 ? 'passed' : 'needs_review',
     warnings: uniqueWarnings,
     word_count: words,
     question_count: questions,
+    checks,
   };
 }

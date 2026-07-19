@@ -671,6 +671,13 @@ async function openDraft(messageId) {
   approveBtn.addEventListener('click', busy(approveBtn, async () => {
     await saveChanges();
     const result = await api('/messages/' + m.id + '/approve', { method: 'POST' });
+    if (result.repaired) {
+      toast('Draft automatically improved. Review the updated copy, then approve again.');
+      closeLayer('modal');
+      await Promise.all([loadDrafts(), refreshStats()]);
+      await openDraft(m.id);
+      return;
+    }
     toast(result.queued ? 'Approved and queued for sending' : 'Approved - queue retry pending');
     closeLayer('modal');
     await Promise.all([loadDrafts(), refreshStats()]);
@@ -697,6 +704,9 @@ async function openDraft(messageId) {
 
   const warnings = parseJsonValue(m.validation_warnings, []);
   const nextPlan = parseJsonValue(m.next_step_plan, null);
+  const qualityChecklist = nextPlan && Array.isArray(nextPlan.quality_checklist)
+    ? nextPlan.quality_checklist : [];
+  const automation = nextPlan && nextPlan.draft_automation ? nextPlan.draft_automation : null;
   const qualityLabel = m.draft_quality_status || (m.status === 'draft' ? 'passed' : 'needs_review');
   const strategyPanel = el('aside', { class: 'strategy-panel' },
     el('h3', {}, 'Draft strategy'),
@@ -712,6 +722,18 @@ async function openDraft(messageId) {
       : qualityLabel === 'passed'
         ? el('p', { class: 'quality-pass small' }, 'All drafting checks passed.')
         : el('p', { class: 'warning small' }, 'Held for manual review.'),
+    qualityChecklist.length
+      ? el('div', {}, el('h3', {}, 'Sendability checklist'),
+        el('ul', { class: 'warning-list' }, ...qualityChecklist.map((check) =>
+          el('li', { class: check.passed ? 'quality-pass' : 'warning' },
+            (check.passed ? '✓ ' : '✕ ') + check.label))))
+      : null,
+    automation
+      ? el('p', { class: 'muted small' },
+        'Automation: ' + (automation.auto_repaired ? 'repaired' : 'passed first draft') +
+        ' · repair passes ' + (automation.repair_attempts || 0) +
+        (automation.used_fallback ? ' · safe fallback used' : ''))
+      : null,
     el('h3', {}, 'Next-step plan'),
     nextPlan ? el('div', { class: 'kv' },
       el('div', {}, 'Email goal'), el('div', {}, nextPlan.email_goal || ''),

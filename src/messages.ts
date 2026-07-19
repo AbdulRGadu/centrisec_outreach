@@ -2,6 +2,7 @@ import { recordEvent } from './db';
 import type { Env } from './env';
 import { HttpError, jsonResponse, normalizeMultiline, normalizeText } from './http';
 import { getLead } from './leads';
+import { autoRepairStoredDraft } from './pipeline';
 import { processSend } from './sending';
 import { validateDraftQuality } from './services/draftQuality';
 import { normalizeDraftSubject, renderDraftEmail } from './services/emailRenderer';
@@ -72,9 +73,22 @@ export async function handleMessagePatch(id: string, body: Record<string, unknow
         strategy ?? undefined,
         typeof body.body === 'string' ? normalizeMultiline(body.body, 5000) : finalBody
       )
-    : { valid: false, status: 'needs_review' as const, warnings: ['Draft has no lead.'], word_count: 0, question_count: 0 };
+    : { valid: false, status: 'needs_review' as const, warnings: ['Draft has no lead.'], word_count: 0, question_count: 0, checks: [] };
   const nextStatus = quality.valid ? 'draft' : 'needs_review';
   const warning = quality.valid ? null : `Draft quality warning: ${quality.warnings.join(' ')}`.slice(0, 500);
+  let savedPlan: Record<string, unknown> = {};
+  try {
+    const parsed = message.next_step_plan ? JSON.parse(message.next_step_plan) as unknown : null;
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      savedPlan = parsed as Record<string, unknown>;
+    }
+  } catch {
+    // Replace malformed historical metadata with the current checklist.
+  }
+  const nextStepPlan = JSON.stringify({
+    ...savedPlan,
+    quality_checklist: quality.checks,
+  });
 
   await env.DB
     .prepare(
@@ -85,10 +99,11 @@ export async function handleMessagePatch(id: string, body: Record<string, unknow
          error = ?4,
          draft_quality_status = ?5,
          validation_warnings = ?6,
+         next_step_plan = ?7,
          updated_at = datetime('now')
-       WHERE id = ?7 AND status IN ('draft','needs_review')`
+       WHERE id = ?8 AND status IN ('draft','needs_review')`
     )
-    .bind(subject, newBody, nextStatus, warning, quality.status, JSON.stringify(quality.warnings), id)
+    .bind(subject, newBody, nextStatus, warning, quality.status, JSON.stringify(quality.warnings), nextStepPlan, id)
     .run();
   if (message.lead_id) {
     await recordEvent(env.DB, message.lead_id, 'draft_edited', { message_id: id });
@@ -96,7 +111,7 @@ export async function handleMessagePatch(id: string, body: Record<string, unknow
   return jsonResponse({ ok: true, message: await getMessage(env, id) });
 }
 
-async function assertSendable(env: Env, message: MessageRow): Promise<LeadRow> {
+async function assertEligibleToSend(env: Env, message: MessageRow): Promise<LeadRow> {
   if (message.direction !== 'outbound') throw new HttpError(409, 'Not an outbound message');
   if (!message.lead_id) throw new HttpError(409, 'Message has no lead');
   const lead = await getLead(env, message.lead_id);
@@ -116,15 +131,16 @@ async function assertSendable(env: Env, message: MessageRow): Promise<LeadRow> {
   if (other) {
     throw new HttpError(409, 'One cold email per lead: another email is already queued or sent');
   }
-  if (message.draft_quality_status === 'needs_review') {
-    throw new HttpError(409, 'Draft is marked needs_review; save an edited version that passes quality checks first');
-  }
-  const strategy = buildPersonalizationPlan(lead).strategy;
-  const quality = validateDraftQuality(message.subject ?? '', message.body ?? '', lead, strategy);
-  if (!quality.valid) {
-    throw new HttpError(409, `Draft must pass quality review before approval: ${quality.warnings.join(' ')}`);
-  }
   return lead;
+}
+
+function currentQuality(message: MessageRow, lead: LeadRow) {
+  return validateDraftQuality(
+    message.subject ?? '',
+    message.body ?? '',
+    lead,
+    buildPersonalizationPlan(lead).strategy
+  );
 }
 
 export async function handleMessageApprove(id: string, env: Env): Promise<Response> {
@@ -132,7 +148,24 @@ export async function handleMessageApprove(id: string, env: Env): Promise<Respon
   if (!['draft', 'needs_review'].includes(message.status)) {
     throw new HttpError(409, `Cannot approve a message in status '${message.status}'`);
   }
-  const lead = await assertSendable(env, message);
+  const lead = await assertEligibleToSend(env, message);
+  const quality = currentQuality(message, lead);
+  if (message.draft_quality_status === 'needs_review' || !quality.valid) {
+    const repaired = await autoRepairStoredDraft(env, message, lead);
+    if (!repaired.automation.quality.valid) {
+      throw new HttpError(
+        409,
+        `Automated repair could not pass quality review: ${repaired.automation.quality.warnings.join(' ')}`
+      );
+    }
+    return jsonResponse({
+      ok: true,
+      repaired: true,
+      approvalRequired: true,
+      queued: false,
+      message: repaired.message,
+    });
+  }
 
   const claim = await env.DB
     .prepare(
@@ -213,7 +246,27 @@ export async function handleSendNow(id: string, env: Env): Promise<Response> {
   if (!['draft', 'needs_review', 'approved', 'queued'].includes(message.status)) {
     throw new HttpError(409, `Cannot send a message in status '${message.status}'`);
   }
-  const lead = await assertSendable(env, message);
+  const lead = await assertEligibleToSend(env, message);
+  const quality = currentQuality(message, lead);
+  if (message.draft_quality_status === 'needs_review' || !quality.valid) {
+    if (!['draft', 'needs_review'].includes(message.status)) {
+      throw new HttpError(409, `Approved draft no longer passes quality review: ${quality.warnings.join(' ')}`);
+    }
+    const repaired = await autoRepairStoredDraft(env, message, lead);
+    if (!repaired.automation.quality.valid) {
+      throw new HttpError(
+        409,
+        `Automated repair could not pass quality review: ${repaired.automation.quality.warnings.join(' ')}`
+      );
+    }
+    return jsonResponse({
+      ok: true,
+      repaired: true,
+      approvalRequired: true,
+      sent: false,
+      message: repaired.message,
+    });
+  }
 
   if (message.status !== 'queued') {
     const claim = await env.DB
