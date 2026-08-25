@@ -53,6 +53,7 @@ export async function handleLeadsPost(body: Record<string, unknown>, env: Env): 
   if (rawLeads.length > 100) {
     throw new HttpError(400, 'Max 100 leads per batch');
   }
+  const allowDuplicates = body.allowDuplicates === true;
 
   const prepared = rawLeads.map(prepareLead);
   const validEmails = [...new Set(prepared.filter((p) => p.valid).map((p) => p.email))];
@@ -90,7 +91,7 @@ export async function handleLeadsPost(body: Record<string, unknown>, env: Env): 
       results.push({ email: p.email, result: 'suppressed' });
       continue;
     }
-    if (existingEmails.has(p.email) || seenInBatch.has(p.email)) {
+    if ((!allowDuplicates && existingEmails.has(p.email)) || seenInBatch.has(p.email)) {
       results.push({ email: p.email, result: 'duplicate_email' });
       continue;
     }

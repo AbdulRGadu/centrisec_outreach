@@ -304,6 +304,10 @@ test('draft page supports filtered selection and bulk approval sending', () => {
   assert.match(dashboard, /Approve &amp; send selected/);
   assert.match(dashboard, /sendSelectedDrafts/);
   assert.match(dashboard, /\/messages\/\' \+ id \+ \'\/send-now/);
+  assert.match(dashboard, /drafts-regenerate-all/);
+  assert.match(dashboard, /draft-date-from/);
+  assert.match(dashboard, /draft-view/);
+  assert.match(dashboard, /allowDuplicates/);
 });
 
 test('custom email wording flows into the rendered draft and CTA strategy', () => {

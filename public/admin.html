@@ -191,6 +191,10 @@
         <div class="toolbar">
           <input id="draft-filter-company" placeholder="Filter company">
           <input id="draft-filter-industry" placeholder="Filter industry">
+          <select id="draft-view" aria-label="Draft list view"><option value="review">Drafts to review</option><option value="sent">Sent list</option></select>
+          <input id="draft-date-from" type="date" aria-label="Generated from" title="Generated from">
+          <input id="draft-date-to" type="date" aria-label="Generated to" title="Generated to">
+          <select id="draft-date-sort" aria-label="Sort by generated date"><option value="desc">Newest first</option><option value="asc">Oldest first</option></select>
           <select id="draft-filter-segment" aria-label="Filter company segment">
             <option value="">All segments</option>
             <option value="fintech">fintech</option><option value="healthcare">healthcare</option>
@@ -201,6 +205,7 @@
           <label class="muted small">Amount <input id="draft-send-amount" type="number" min="1" max="200" value="10" style="width:70px"></label>
           <button id="drafts-select-visible">Select visible</button>
           <button id="drafts-clear-selection">Clear</button>
+          <button id="drafts-regenerate-all">Regenerate visible</button>
           <button id="drafts-send-selected" class="primary">Approve &amp; send selected</button>
         </div>
         <p id="drafts-selection-status" class="muted small" style="margin:6px 0 0">0 selected</p>
@@ -660,16 +665,25 @@ async function draftLead(id) {
 /* ---------- Drafts tab ---------- */
 
 async function loadDrafts() {
-  const data = await api('/messages?status=review&limit=200');
+  const view = $('#draft-view').value;
+  $('#drafts-send-selected').disabled = view === 'sent';
+  $('#drafts-regenerate-all').disabled = view === 'sent';
+  const data = await api('/messages?status=' + encodeURIComponent(view) + '&limit=200');
   state.draftMessages = data.messages || [];
   const companyFilter = $('#draft-filter-company').value.trim().toLowerCase();
   const industryFilter = $('#draft-filter-industry').value.trim().toLowerCase();
   const segmentFilter = $('#draft-filter-segment').value;
-  const messages = state.draftMessages.filter((m) => {
+  const dateFrom = $('#draft-date-from').value;
+  const dateTo = $('#draft-date-to').value;
+  let messages = state.draftMessages.filter((m) => {
     const company = String(m.lead_company || '').toLowerCase();
     const industry = String(m.lead_industry || '').toLowerCase();
     return (!companyFilter || company.includes(companyFilter)) && (!industryFilter || industry.includes(industryFilter)) && (!segmentFilter || m.lead_segment === segmentFilter);
   });
+  messages = messages.filter((m) => {
+    const generated = String(m.created_at || m.updated_at || '').slice(0, 10);
+    return (!dateFrom || generated >= dateFrom) && (!dateTo || generated <= dateTo);
+  }).sort((a, b) => ($('#draft-date-sort').value === 'asc' ? 1 : -1) * String(a.created_at || a.updated_at || '').localeCompare(String(b.created_at || b.updated_at || '')));
   const list = $('#drafts-list');
   state.draftSelection = new Set([...state.draftSelection].filter((id) => messages.some((m) => m.id === id)));
   updateDraftSelectionStatus();
@@ -696,7 +710,7 @@ async function loadDrafts() {
       el('div', { class: 'muted small', style: 'margin-top:4px' }, String(m.body || '').slice(0, 220) + (String(m.body || '').length > 220 ? '...' : '')),
       warnings.length ? el('p', { class: 'warning small' }, warnings[0] + (warnings.length > 1 ? ` +${warnings.length - 1} more` : '')) : null,
       el('div', { class: 'row', style: 'margin-top:10px' },
-        el('button', { class: 'primary', onclick: () => openDraft(m.id) }, 'Review and approve'))
+        el('button', { class: 'primary', onclick: () => openDraft(m.id) }, view === 'sent' ? 'View sent email' : 'Review and approve'))
     );
   }));
 }
@@ -717,6 +731,7 @@ function visibleDrafts() {
 }
 
 async function sendSelectedDrafts() {
+  if ($('#draft-view').value === 'sent') { toast('Sent emails are view-only', true); return; }
   const amount = Math.min(Math.max(Number.parseInt($('#draft-send-amount').value, 10) || 1, 1), 200);
   const selected = [...state.draftSelection].slice(0, amount);
   if (!selected.length) { toast('Select at least one draft first', true); return; }
@@ -738,6 +753,17 @@ async function sendSelectedDrafts() {
   } finally {
     button.disabled = false;
   }
+}
+
+async function regenerateVisibleDrafts() {
+  if ($('#draft-view').value !== 'review') { toast('Switch to Drafts to regenerate', true); return; }
+  const amount = Math.min(Math.max(Number.parseInt($('#draft-send-amount').value, 10) || 1, 1), 200);
+  const targets = visibleDrafts().slice(0, amount);
+  if (!targets.length) { toast('No drafts match the current filters', true); return; }
+  if (!confirm('Regenerate ' + targets.length + ' visible drafts?')) return;
+  const button = $('#drafts-regenerate-all'); button.disabled = true;
+  try { for (const message of targets) await api('/leads/' + message.lead_id + '/draft', { method: 'POST', body: { force: true } }); toast(targets.length + ' regenerated'); await loadDrafts(); }
+  finally { button.disabled = false; }
 }
 
 function parseJsonValue(json, fallback) {
@@ -1088,6 +1114,10 @@ $('#page-next').addEventListener('click', () => {
   if ((state.page + 1) * state.pageSize < state.total) { state.page++; loadLeads(); }
 });
 $('#drafts-refresh').addEventListener('click', () => loadDrafts().catch((e) => toast(e.message, true)));
+$('#drafts-regenerate-all').addEventListener('click', () => regenerateVisibleDrafts().catch((e) => toast(e.message, true)));
+['#draft-view', '#draft-date-from', '#draft-date-to', '#draft-date-sort'].forEach((selector) => {
+  $(selector).addEventListener('change', () => loadDrafts().catch((e) => toast(e.message, true)));
+});
 $('#drafts-select-visible').addEventListener('click', () => {
   for (const message of visibleDrafts()) state.draftSelection.add(message.id);
   updateDraftSelectionStatus();
@@ -1202,8 +1232,14 @@ $('#a-save').addEventListener('click', async () => {
     const r = await api('/leads', { method: 'POST', body: { leads: leads } });
     const inserted = r.results.filter((row) => row.result === 'inserted').length;
     const duplicates = r.results.filter((row) => row.result === 'duplicate_email').length;
-    $('#a-result').textContent = `${inserted} added${duplicates ? `, ${duplicates} duplicate${duplicates === 1 ? '' : 's'}` : ''} (${leads.length} detected)`;
-    if (inserted > 0) {
+    const duplicateLeads = leads.filter((_lead, index) => r.results[index]?.result === 'duplicate_email');
+    let forcedInserted = 0;
+    if (duplicateLeads.length && confirm(duplicates + ' lead' + (duplicates === 1 ? '' : 's') + ' already exist. Add them anyway?')) {
+      const forced = await api('/leads', { method: 'POST', body: { leads: duplicateLeads, allowDuplicates: true } });
+      forcedInserted = forced.results.filter((row) => row.result === 'inserted').length;
+    }
+    $('#a-result').textContent = `${inserted + forcedInserted} added${duplicates ? `, ${duplicates} duplicate${duplicates === 1 ? '' : 's'}` : ''} (${leads.length} detected)`;
+    if (inserted + forcedInserted > 0) {
       ['#a-email','#a-bulk-emails','#a-first','#a-last','#a-role','#a-company','#a-website','#a-industry','#a-sub-industry','#a-country','#a-notes'].forEach((s) => { $(s).value = ''; });
       toast(`${inserted} lead${inserted === 1 ? '' : 's'} added`);
       await refreshStats();
