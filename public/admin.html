@@ -187,6 +187,24 @@
         <span class="muted">Every email is reviewed here before it can be sent.</span>
         <button id="drafts-refresh" style="margin-left:auto">Refresh</button>
       </div>
+      <div class="card" style="margin-top:10px">
+        <div class="toolbar">
+          <input id="draft-filter-company" placeholder="Filter company">
+          <input id="draft-filter-industry" placeholder="Filter industry">
+          <select id="draft-filter-segment" aria-label="Filter company segment">
+            <option value="">All segments</option>
+            <option value="fintech">fintech</option><option value="healthcare">healthcare</option>
+            <option value="education">education</option><option value="logistics">logistics</option>
+            <option value="saas">saas</option><option value="ecommerce">ecommerce</option>
+            <option value="professional_services">professional services</option><option value="general_business">general business</option>
+          </select>
+          <label class="muted small">Amount <input id="draft-send-amount" type="number" min="1" max="200" value="10" style="width:70px"></label>
+          <button id="drafts-select-visible">Select visible</button>
+          <button id="drafts-clear-selection">Clear</button>
+          <button id="drafts-send-selected" class="primary">Approve &amp; send selected</button>
+        </div>
+        <p id="drafts-selection-status" class="muted small" style="margin:6px 0 0">0 selected</p>
+      </div>
       <div id="drafts-list"></div>
     </section>
 
@@ -297,6 +315,8 @@ const state = {
   pageSize: 50,
   total: 0,
   drafting: new Set(),
+  draftMessages: [],
+  draftSelection: new Set(),
 };
 
 const $ = (sel) => document.querySelector(sel);
@@ -625,16 +645,31 @@ async function draftLead(id) {
 /* ---------- Drafts tab ---------- */
 
 async function loadDrafts() {
-  const data = await api('/messages?status=review');
+  const data = await api('/messages?status=review&limit=200');
+  state.draftMessages = data.messages || [];
+  const companyFilter = $('#draft-filter-company').value.trim().toLowerCase();
+  const industryFilter = $('#draft-filter-industry').value.trim().toLowerCase();
+  const segmentFilter = $('#draft-filter-segment').value;
+  const messages = state.draftMessages.filter((m) => {
+    const company = String(m.lead_company || '').toLowerCase();
+    const industry = String(m.lead_industry || '').toLowerCase();
+    return (!companyFilter || company.includes(companyFilter)) && (!industryFilter || industry.includes(industryFilter)) && (!segmentFilter || m.lead_segment === segmentFilter);
+  });
   const list = $('#drafts-list');
-  if (data.messages.length === 0) {
-    list.replaceChildren(el('p', { class: 'empty' }, 'No drafts awaiting approval.'));
+  state.draftSelection = new Set([...state.draftSelection].filter((id) => messages.some((m) => m.id === id)));
+  updateDraftSelectionStatus();
+  if (messages.length === 0) {
+    list.replaceChildren(el('p', { class: 'empty' }, 'No drafts match these filters.'));
     return;
   }
-  list.replaceChildren(...data.messages.map((m) => {
+  list.replaceChildren(...messages.map((m) => {
     const warnings = parseJsonValue(m.validation_warnings, []);
     return el('div', { class: 'card' },
       el('div', { class: 'row' },
+        el('input', { type: 'checkbox', 'aria-label': 'Select ' + (m.to_email || m.lead_email || ''), checked: state.draftSelection.has(m.id), onchange: (event) => {
+          if (event.target.checked) state.draftSelection.add(m.id); else state.draftSelection.delete(m.id);
+          updateDraftSelectionStatus();
+        } }),
         el('b', {}, m.lead_company || m.lead_email || m.to_email || ''),
         m.lead_segment ? chip(m.lead_segment, 'seg-') : null,
         m.buyer_persona ? chip(m.buyer_persona, 'persona-') : null,
@@ -649,6 +684,45 @@ async function loadDrafts() {
         el('button', { class: 'primary', onclick: () => openDraft(m.id) }, 'Review and approve'))
     );
   }));
+}
+
+function updateDraftSelectionStatus() {
+  const status = $('#drafts-selection-status');
+  if (status) status.textContent = state.draftSelection.size + ' selected';
+}
+
+function visibleDrafts() {
+  const company = $('#draft-filter-company').value.trim().toLowerCase();
+  const industry = $('#draft-filter-industry').value.trim().toLowerCase();
+  const segment = $('#draft-filter-segment').value;
+  return state.draftMessages.filter((m) =>
+    (!company || String(m.lead_company || '').toLowerCase().includes(company)) &&
+    (!industry || String(m.lead_industry || '').toLowerCase().includes(industry)) &&
+    (!segment || m.lead_segment === segment));
+}
+
+async function sendSelectedDrafts() {
+  const amount = Math.min(Math.max(Number.parseInt($('#draft-send-amount').value, 10) || 1, 1), 200);
+  const selected = [...state.draftSelection].slice(0, amount);
+  if (!selected.length) { toast('Select at least one draft first', true); return; }
+  if (!confirm('Approve and send ' + selected.length + ' selected draft' + (selected.length === 1 ? '' : 's') + '?')) return;
+  const button = $('#drafts-send-selected');
+  button.disabled = true;
+  let sent = 0; let blocked = 0; let repaired = 0;
+  try {
+    for (const id of selected) {
+      try {
+        const result = await api('/messages/' + id + '/send-now', { method: 'POST' });
+        if (result.sent) { sent++; state.draftSelection.delete(id); }
+        else if (result.repaired) repaired++;
+        else blocked++;
+      } catch { blocked++; }
+    }
+    toast(sent + ' sent' + (blocked ? ', ' + blocked + ' blocked' : '') + (repaired ? ', ' + repaired + ' repaired for review' : ''));
+    await Promise.all([loadDrafts(), refreshStats()]);
+  } finally {
+    button.disabled = false;
+  }
 }
 
 function parseJsonValue(json, fallback) {
@@ -988,6 +1062,21 @@ $('#page-next').addEventListener('click', () => {
   if ((state.page + 1) * state.pageSize < state.total) { state.page++; loadLeads(); }
 });
 $('#drafts-refresh').addEventListener('click', () => loadDrafts().catch((e) => toast(e.message, true)));
+$('#drafts-select-visible').addEventListener('click', () => {
+  for (const message of visibleDrafts()) state.draftSelection.add(message.id);
+  updateDraftSelectionStatus();
+  loadDrafts().catch((e) => toast(e.message, true));
+});
+$('#drafts-clear-selection').addEventListener('click', () => {
+  state.draftSelection.clear();
+  updateDraftSelectionStatus();
+  loadDrafts().catch((e) => toast(e.message, true));
+});
+$('#drafts-send-selected').addEventListener('click', () => sendSelectedDrafts().catch((e) => toast(e.message, true)));
+['#draft-filter-company', '#draft-filter-industry', '#draft-filter-segment'].forEach((selector) => {
+  $(selector).addEventListener('input', () => loadDrafts().catch((e) => toast(e.message, true)));
+  $(selector).addEventListener('change', () => loadDrafts().catch((e) => toast(e.message, true)));
+});
 $('#replies-refresh').addEventListener('click', () => loadReplies().catch((e) => toast(e.message, true)));
 $('#reply-debug-refresh').addEventListener('click', () => loadReplyDebug().catch((e) => toast(e.message, true)));
 $('#s-add').addEventListener('click', async () => {
