@@ -152,7 +152,7 @@ export default {
         return await handleApi(request, env, url);
       }
       if (url.pathname === '/') {
-        return new Response(null, { status: 302, headers: { Location: '/admin' } });
+        return env.ASSETS.fetch(request);
       }
       return env.ASSETS.fetch(request);
     } catch (err) {

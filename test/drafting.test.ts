@@ -133,6 +133,13 @@ test('dashboard accepts the six-digit PIN without exposing API-key wording', asy
   assert.doesNotMatch(dashboard, /Enter the API key|placeholder="API key"/i);
 });
 
+test('public landing page is informational and does not collect credentials', () => {
+  const landing = readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
+  assert.match(landing, /Centrisec Campaign Console/);
+  assert.match(landing, /Open internal console/);
+  assert.doesNotMatch(landing, /input|password|API key|PIN/i);
+});
+
 test('renderer fixes greeting and signoff without rewriting the message', () => {
   const rendered = renderDraftEmail(
     validBody.replace('Hi Ada,', 'Dear Ada,').replace('Best,\nCentrisec Team', 'Regards,\nCentrisec'),
