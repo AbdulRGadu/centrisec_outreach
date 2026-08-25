@@ -132,8 +132,8 @@
 <div id="login" class="hidden">
   <form id="login-form">
     <h1>Centrisec <span style="color:var(--accent)">Outreach</span></h1>
-    <p class="muted small" style="margin:0">Enter the API key to open the dashboard.</p>
-    <input id="login-token" type="password" placeholder="API key" autocomplete="off" required>
+    <p class="muted small" style="margin:0">Enter the 6-digit PIN to open the dashboard.</p>
+    <input id="login-token" type="password" inputmode="numeric" pattern="[0-9]{6}" minlength="6" maxlength="6" placeholder="6-digit PIN" autocomplete="one-time-code" required>
     <button class="primary" type="submit">Open dashboard</button>
     <p id="login-error" class="small hidden" style="color:var(--bad);margin:0"></p>
   </form>
@@ -144,7 +144,7 @@
     <div class="head-row">
       <h1>Centrisec <span>Outreach</span></h1>
       <div id="stats"></div>
-      <button id="logout" class="small" title="Forget the API key on this browser">Lock</button>
+      <button id="logout" class="small" title="Forget the dashboard PIN on this browser">Lock</button>
     </div>
     <nav id="tabs">
       <button data-tab="pipeline" class="active">Pipeline</button>
@@ -1014,7 +1014,7 @@ $('#login-form').addEventListener('submit', async (e) => {
     $('#login-error').classList.add('hidden');
     await boot();
   } catch {
-    $('#login-error').textContent = 'That key was rejected.';
+    $('#login-error').textContent = 'That PIN was rejected.';
     $('#login-error').classList.remove('hidden');
   }
 });

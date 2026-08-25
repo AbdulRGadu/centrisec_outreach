@@ -33,6 +33,7 @@ export interface Env {
 
   // Secrets (wrangler secret / .dev.vars)
   API_KEY: string;
+  DASHBOARD_PIN?: string;
   CF_AI_TOKEN: string;
   ZOHO_CLIENT_ID: string;
   ZOHO_CLIENT_SECRET: string;

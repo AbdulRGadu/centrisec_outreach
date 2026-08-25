@@ -11,6 +11,7 @@ import { deliveryTestEnabled, priorOutboundBlocksDelivery } from '../src/service
 import { renderDraftEmail } from '../src/services/emailRenderer.ts';
 import { buildPersonalizationPlan } from '../src/services/personalization.ts';
 import type { LeadRow } from '../src/types.ts';
+import { isAuthorized } from '../src/auth.ts';
 
 function lead(values: Partial<LeadRow> = {}): LeadRow {
   return {
@@ -115,6 +116,21 @@ test('confirmed delivery tests bypass only prior sent history', () => {
   assert.equal(priorOutboundBlocksDelivery(true, 'sending'), true);
   assert.equal(priorOutboundBlocksDelivery(true, 'send_unknown'), true);
   assert.equal(priorOutboundBlocksDelivery(false, 'sent'), true);
+});
+
+test('dashboard accepts the six-digit PIN without exposing API-key wording', async () => {
+  const env = { API_KEY: 'machine-only-key' } as Env;
+  const pinRequest = new Request('https://example.test/api/stats', {
+    headers: { Authorization: 'Bearer 123419' },
+  });
+  const apiKeyRequest = new Request('https://example.test/api/stats', {
+    headers: { Authorization: 'Bearer machine-only-key' },
+  });
+  assert.equal(await isAuthorized(pinRequest, env), true);
+  assert.equal(await isAuthorized(apiKeyRequest, env), true);
+  const dashboard = readFileSync(new URL('../public/admin.html', import.meta.url), 'utf8');
+  assert.match(dashboard, /6-digit PIN/);
+  assert.doesNotMatch(dashboard, /Enter the API key|placeholder="API key"/i);
 });
 
 test('renderer fixes greeting and signoff without rewriting the message', () => {

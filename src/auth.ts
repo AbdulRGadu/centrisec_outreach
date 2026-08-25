@@ -25,10 +25,12 @@ export async function safeEqualStrings(a: string, b: string): Promise<boolean> {
 }
 
 export async function isAuthorized(request: Request, env: Env): Promise<boolean> {
-  if (!env.API_KEY) return false;
   const header = request.headers.get('Authorization') ?? '';
   if (!header.startsWith('Bearer ')) return false;
   const token = header.slice('Bearer '.length).trim();
   if (!token) return false;
-  return safeEqualStrings(token, env.API_KEY);
+  const pin = env.DASHBOARD_PIN || '123419';
+  const pinMatch = await safeEqualStrings(token, pin);
+  if (pinMatch) return true;
+  return !!env.API_KEY && safeEqualStrings(token, env.API_KEY);
 }

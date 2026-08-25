@@ -42,6 +42,7 @@
     "crons": ["*/15 * * * *", "0 7-15/2 * * 1-5"]
   },
   "vars": {
+    "DASHBOARD_PIN": "123419",
     "CF_ACCOUNT_ID": "c042400a63d2d3d81042613f4abef9c1",
     "AI_GATEWAY_ID": "outreach",
     "AI_PROVIDER": "cloudflare_ai_gateway",
