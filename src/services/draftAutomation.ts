@@ -66,13 +66,13 @@ function offerSentence(plan: DraftPersonalizationPlan): string {
 
 export function buildSafeFallbackDraft(lead: LeadRow, plan: DraftPersonalizationPlan): DraftCandidate {
   const body = [
-    expectedGreeting(lead),
+    expectedGreeting(lead, plan.messaging),
     'I’m reaching out from Centrisec.',
     practicalHelp(plan),
     plan.strategy.likely_security_context,
     offerSentence(plan),
     plan.strategy.recommended_cta,
-    'Best,\nCentrisec Team',
+    `${plan.messaging.signoff},\n${plan.messaging.senderName}`,
   ].join('\n\n');
   return {
     subject: /walkthrough/i.test(plan.strategy.recommended_offer)
@@ -84,11 +84,11 @@ export function buildSafeFallbackDraft(lead: LeadRow, plan: DraftPersonalization
 
 function assess(candidate: DraftCandidate, lead: LeadRow, plan: DraftPersonalizationPlan): DraftCandidate & { quality: DraftQualityResult } {
   const subject = normalizeDraftSubject(candidate.subject ?? '');
-  const body = renderDraftEmail(candidate.body ?? '', lead);
+  const body = renderDraftEmail(candidate.body ?? '', lead, plan.messaging);
   return {
     subject,
     body,
-    quality: validateDraftQuality(subject, body, lead, plan.strategy, candidate.body ?? ''),
+    quality: validateDraftQuality(subject, body, lead, plan.strategy, candidate.body ?? '', plan.messaging),
   };
 }
 

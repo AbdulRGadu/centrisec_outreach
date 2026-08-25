@@ -2,6 +2,7 @@ import type { LeadRow } from '../types';
 import { wordCount } from '../util/text.ts';
 import { expectedGreeting } from './emailRenderer.ts';
 import { leadShowsWarmIntent, type LeadSegmentationResult } from './leadSegmentation.ts';
+import { DEFAULT_OUTREACH_SETTINGS, type OutreachSettings } from './outreachSettings.ts';
 
 export interface DraftQualityResult {
   valid: boolean;
@@ -53,7 +54,8 @@ export function validateDraftQuality(
   body: string,
   lead: LeadRow,
   strategy?: LeadSegmentationResult,
-  sourceBody = body
+  sourceBody = body,
+  settings: OutreachSettings = DEFAULT_OUTREACH_SETTINGS
 ): DraftQualityResult {
   const warnings: string[] = [];
   const normalized = body.replace(/\r\n?/g, '\n').trim();
@@ -70,7 +72,7 @@ export function validateDraftQuality(
   if (words < 80) warnings.push('Body is shorter than 80 words.');
   if (words > 140) warnings.push('Body exceeds the 140-word quality limit.');
   if (blocks.length !== 7) warnings.push('Body must contain exactly seven structured paragraphs including greeting and signoff.');
-  if (blocks[0] !== expectedGreeting(lead)) warnings.push(`Greeting must be exactly "${expectedGreeting(lead)}".`);
+  if (blocks[0] !== expectedGreeting(lead, settings)) warnings.push(`Greeting must be exactly "${expectedGreeting(lead, settings)}".`);
   if (!/^I['\u2019]m reaching out from Centrisec\.$/.test(blocks[1] ?? '')) {
     warnings.push('Sender line must be one short Centrisec introduction.');
   }
@@ -97,16 +99,16 @@ export function validateDraftQuality(
   if (/\b(?:we found|we detected|we identified|our scan|we scanned|we audited|your (?:company|team|systems?) (?:has|have|lacks?)|you have)\b.{0,55}\b(?:vulnerabilit|security gap|weak control|exposure)\b/i.test(raw)) {
     warnings.push('Draft claims an unverified vulnerability or security gap.');
   }
-  if (/\bproposal\b/i.test(raw) && !warm) warnings.push('A proposal is too early for this cold lead.');
+  if (/\bproposal\b/i.test(raw) && !warm && settings.cta === DEFAULT_OUTREACH_SETTINGS.cta) warnings.push('A proposal is too early for this cold lead.');
   if (/https?:\/\/\S*(?:unsubscribe|opt[-_]?out)\S*/i.test(raw)) warnings.push('An unsubscribe URL is present.');
   if (/\b(?:unsubscribe|opt out)\b/i.test(raw)) warnings.push('AI body includes footer or unsubscribe text.');
   if (/Centrisec \| Managed Cybersecurity|centrisec_fulllogo|abdul\.gadu@centrisec\.com|\+234\s*907/i.test(raw)) {
     warnings.push('AI body includes system footer content.');
   }
   if (/^\s*\u2014\s*$/m.test(raw)) warnings.push('A standalone em dash separator is present.');
-  const bestSignoffs = (raw.match(/^Best,$/gim) ?? []).length;
-  const teamSignoffs = (raw.match(/^Centrisec Team$/gim) ?? []).length;
-  if (bestSignoffs !== 1 || teamSignoffs !== 1) warnings.push('Signoff is missing or duplicated.');
+  const signoffLines = (raw.match(new RegExp(`^${escapeRegExp(settings.signoff)},?$`, 'gim')) ?? []).length;
+  const senderLines = (raw.match(new RegExp(`^${escapeRegExp(settings.senderName)}$`, 'gim')) ?? []).length;
+  if (signoffLines !== 1 || senderLines !== 1) warnings.push('Signoff is missing or duplicated.');
   if ((raw.match(/\bCentrisec\b/gi) ?? []).length > 2) warnings.push('Centrisec is mentioned more often than needed.');
   if (VAGUE_FILLER.test(raw)) warnings.push('Draft uses vague filler without practical detail.');
   if (/\b(?:guaranteed|limited time|act now|urgent(?:ly)?|final chance|before it['\u2019]s too late)\b/i.test(raw)) {
@@ -138,4 +140,8 @@ export function validateDraftQuality(
     question_count: questions,
     checks,
   };
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }

@@ -5,6 +5,7 @@ import {
   segmentLead,
   type LeadSegmentationResult,
 } from './leadSegmentation.ts';
+import { DEFAULT_OUTREACH_SETTINGS, type OutreachSettings } from './outreachSettings.ts';
 
 export interface NormalizedProspect {
   first_name: string;
@@ -21,6 +22,7 @@ export interface DraftPersonalizationPlan {
   strategy: LeadSegmentationResult;
   outreach_angle: string;
   is_warm: boolean;
+  messaging: OutreachSettings;
 }
 
 function outreachAngle(strategy: LeadSegmentationResult): string {
@@ -43,7 +45,7 @@ function outreachAngle(strategy: LeadSegmentationResult): string {
   }
 }
 
-export function buildPersonalizationPlan(lead: LeadRow): DraftPersonalizationPlan {
+export function buildPersonalizationPlan(lead: LeadRow, messaging: OutreachSettings = DEFAULT_OUTREACH_SETTINGS): DraftPersonalizationPlan {
   const normalizedInput = {
     companyName: normalizeInlineText(lead.company, 160),
     industry: normalizeInlineText(lead.industry, 120),
@@ -56,7 +58,14 @@ export function buildPersonalizationPlan(lead: LeadRow): DraftPersonalizationPla
     domain: normalizeInlineText(lead.domain, 180),
     fitScore: lead.fit_score,
   };
-  const strategy = segmentLead(normalizedInput);
+  const baseStrategy = segmentLead(normalizedInput);
+  const strategy = {
+    ...baseStrategy,
+    recommended_cta: messaging.cta === DEFAULT_OUTREACH_SETTINGS.cta ? baseStrategy.recommended_cta : messaging.cta,
+    do_not_say: messaging.cta !== DEFAULT_OUTREACH_SETTINGS.cta
+      ? baseStrategy.do_not_say.filter((phrase) => phrase !== 'proposal' && phrase !== 'book a demo')
+      : baseStrategy.do_not_say,
+  };
 
   return {
     prospect: {
@@ -71,5 +80,6 @@ export function buildPersonalizationPlan(lead: LeadRow): DraftPersonalizationPla
     strategy,
     outreach_angle: outreachAngle(strategy),
     is_warm: leadShowsWarmIntent(normalizedInput),
+    messaging,
   };
 }

@@ -11,6 +11,7 @@ import { deliveryTestEnabled, priorOutboundBlocksDelivery } from './services/del
 import { segmentLeadRow } from './services/leadSegmentation';
 import { planInitialNextStep } from './services/nextStepPlanner';
 import { buildPersonalizationPlan } from './services/personalization';
+import { getOutreachSettings } from './services/outreachSettings';
 import { compatibleLeadSegment } from './schema';
 import { isSuppressed } from './suppression';
 import type { LeadRow, MessageRow } from './types';
@@ -86,7 +87,7 @@ export async function draftLead(env: Env, lead: LeadRow, opts?: { force?: boolea
       .first<MessageRow>();
     if (current) return current;
   }
-  const plan = buildPersonalizationPlan(lead);
+  const plan = buildPersonalizationPlan(lead, await getOutreachSettings(env.DB));
   const nextStepPlan = planInitialNextStep(plan.strategy);
   const storedSegment = await compatibleLeadSegment(env.DB, plan.strategy.segment);
   await env.DB.prepare(
@@ -201,7 +202,7 @@ export async function autoRepairStoredDraft(
   message: MessageRow,
   lead: LeadRow
 ): Promise<{ message: MessageRow; automation: DraftAutomationResult }> {
-  const plan = buildPersonalizationPlan(lead);
+  const plan = buildPersonalizationPlan(lead, await getOutreachSettings(env.DB));
   const nextStepPlan = planInitialNextStep(plan.strategy);
   const baseMessages = buildDraftMessages(plan);
   const model = await activeAiModel(env);

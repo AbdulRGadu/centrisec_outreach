@@ -1,6 +1,7 @@
 import type { Classification } from '../ai/schemas';
 import type { LeadRow } from '../types';
 import type { LeadSegmentationResult } from './leadSegmentation';
+import { DEFAULT_OUTREACH_SETTINGS, type OutreachSettings } from './outreachSettings.ts';
 
 export type ReplyNextAction =
   | 'send_checklist_or_offer_walkthrough'
@@ -71,29 +72,29 @@ export function salesStageFor(classification: string): string {
   }
 }
 
-function greeting(lead: LeadRow | null): string {
-  return lead?.first_name?.trim() ? `Hi ${lead.first_name.trim()},` : 'Hello,';
+function greeting(lead: LeadRow | null, settings: OutreachSettings): string {
+  return lead?.first_name?.trim() ? `${settings.greeting} ${lead.first_name.trim()},` : `${settings.fallbackGreeting},`;
 }
 
-function signoff(): string {
-  return 'Best,\nCentrisec Team';
+function signoff(settings: OutreachSettings): string {
+  return `${settings.signoff},\n${settings.senderName}`;
 }
 
 function referralContact(replyBody: string): string {
   return replyBody.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i)?.[0] ?? 'your colleague';
 }
 
-export function suggestedReplyFor(classification: Classification, lead: LeadRow | null, replyBody = ''): string {
-  const hello = greeting(lead);
+export function suggestedReplyFor(classification: Classification, lead: LeadRow | null, replyBody = '', settings: OutreachSettings = DEFAULT_OUTREACH_SETTINGS): string {
+  const hello = greeting(lead, settings);
   switch (classification) {
     case 'positive_interest':
-      return `${hello}\n\nThanks for getting back to me.\n\nI’ll send over the checklist. It covers practical areas like access control, staff awareness, incident readiness, and protection of sensitive business data.\n\nIf useful, we can also do a short 15-minute walkthrough to help your team interpret it.\n\n${signoff()}`;
+      return `${hello}\n\nThanks for getting back to me.\n\nI’ll send over the checklist. It covers practical areas like access control, staff awareness, incident readiness, and protection of sensitive business data.\n\nIf useful, we can also do a short 15-minute walkthrough to help your team interpret it.\n\n${signoff(settings)}`;
     case 'meeting_request':
-      return `${hello}\n\nThanks for your response.\n\nA short walkthrough would be a good next step. We can use it to understand your current security priorities and show where Centrisec may be useful.\n\nPlease share a convenient time, or I can send over a few options.\n\n${signoff()}`;
+      return `${hello}\n\nThanks for your response.\n\nA short walkthrough would be a good next step. We can use it to understand your current security priorities and show where Centrisec may be useful.\n\nPlease share a convenient time, or I can send over a few options.\n\n${signoff(settings)}`;
     case 'asks_for_more_info':
-      return `${hello}\n\nThanks for getting back to me.\n\nAt a high level, the checklist covers:\n\n- access control and account security\n- staff awareness and everyday security habits\n- incident readiness and sensitive data protection\n\nWould you like me to send the checklist first?\n\n${signoff()}`;
+      return `${hello}\n\nThanks for getting back to me.\n\nAt a high level, the checklist covers:\n\n- access control and account security\n- staff awareness and everyday security habits\n- incident readiness and sensitive data protection\n\nWould you like me to send the checklist first?\n\n${signoff(settings)}`;
     case 'referral_to_colleague':
-      return `${hello}\n\nThanks for pointing me in the right direction. I’ll reach out to ${referralContact(replyBody)} separately and keep the note brief.\n\nI appreciate the introduction.\n\n${signoff()}`;
+      return `${hello}\n\nThanks for pointing me in the right direction. I’ll reach out to ${referralContact(replyBody)} separately and keep the note brief.\n\nI appreciate the introduction.\n\n${signoff(settings)}`;
     default:
       return '';
   }
@@ -105,13 +106,14 @@ export function planReply(args: {
   summary: string;
   lead: LeadRow | null;
   replyBody?: string;
+  settings?: OutreachSettings;
 }): ReplyPlan {
   return {
     classification: args.classification,
     confidence: args.confidence,
     summary: args.summary,
     next_action: nextActionFor(args.classification),
-    suggested_reply: suggestedReplyFor(args.classification, args.lead, args.replyBody),
+    suggested_reply: suggestedReplyFor(args.classification, args.lead, args.replyBody, args.settings),
     sales_stage: salesStageFor(args.classification),
   };
 }

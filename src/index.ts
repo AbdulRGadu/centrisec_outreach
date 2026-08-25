@@ -1,5 +1,6 @@
 import { AiError } from './ai/client';
 import { handleAiModelPost, handleAiModelsGet } from './ai/settings';
+import { handleOutreachSettingsGet, handleOutreachSettingsPost } from './services/outreachSettings';
 import { isAuthorized } from './auth';
 import type { Env } from './env';
 import { HttpError, jsonResponse, readJson } from './http';
@@ -142,6 +143,12 @@ export default {
         if (url.pathname.endsWith('/model') && request.method === 'POST') {
           return handleAiModelPost(await readJson(request), env);
         }
+        throw new HttpError(405, 'Method not allowed');
+      }
+      if (url.pathname === '/admin/outreach/settings') {
+        if (!(await isAuthorized(request, env))) return jsonResponse({ ok: false, error: 'Unauthorized' }, 401);
+        if (request.method === 'GET') return handleOutreachSettingsGet(env.DB);
+        if (request.method === 'POST') return handleOutreachSettingsPost(await readJson(request), env.DB);
         throw new HttpError(405, 'Method not allowed');
       }
       if (url.pathname === '/api' || url.pathname.startsWith('/api/')) {

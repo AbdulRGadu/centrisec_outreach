@@ -13,6 +13,7 @@ import { deliveryTestEnabled, priorOutboundBlocksDelivery } from '../src/service
 import { renderDraftEmail } from '../src/services/emailRenderer.ts';
 import { buildPersonalizationPlan } from '../src/services/personalization.ts';
 import type { LeadRow } from '../src/types.ts';
+import { DEFAULT_OUTREACH_SETTINGS } from '../src/services/outreachSettings.ts';
 import { isAuthorized } from '../src/auth.ts';
 
 function lead(values: Partial<LeadRow> = {}): LeadRow {
@@ -303,4 +304,14 @@ test('draft page supports filtered selection and bulk approval sending', () => {
   assert.match(dashboard, /Approve &amp; send selected/);
   assert.match(dashboard, /sendSelectedDrafts/);
   assert.match(dashboard, /\/messages\/\' \+ id \+ \'\/send-now/);
+});
+
+test('custom email wording flows into the rendered draft and CTA strategy', () => {
+  const settings = { ...DEFAULT_OUTREACH_SETTINGS, greeting: 'Goodday', fallbackGreeting: 'Goodday', signoff: 'Best regards', senderName: 'Gadu Abdul', cta: 'Can I send a proposal for your review?' };
+  const prospect = lead();
+  const plan = buildPersonalizationPlan(prospect, settings);
+  const draft = buildSafeFallbackDraft(prospect, plan);
+  assert.match(draft.body, /^Goodday Ada,/);
+  assert.match(draft.body, /Can I send a proposal for your review\?/);
+  assert.match(draft.body, /Best regards,\nGadu Abdul$/);
 });

@@ -285,6 +285,19 @@
         <p id="ai-model-meta" class="muted small"></p>
         <p id="ai-model-feedback" class="feedback" aria-live="polite"></p>
       </div>
+      <div class="card" style="max-width:720px;margin-top:14px">
+        <h2 style="margin-top:0">Email wording</h2>
+        <p class="muted">These values are applied to new drafts and suggested replies. Keep the CTA to one clear next step.</p>
+        <div class="grid two">
+          <label>Greeting with a name<input id="outreach-greeting" placeholder="Hi"></label>
+          <label>Greeting without a name<input id="outreach-fallback-greeting" placeholder="Hello"></label>
+          <label>Signoff<input id="outreach-signoff" placeholder="Best"></label>
+          <label>Sender name<input id="outreach-sender-name" placeholder="Centrisec Team"></label>
+          <label style="grid-column:1/-1">CTA / next step question<input id="outreach-cta" placeholder="Would it be useful if I sent it over?"></label>
+        </div>
+        <p class="muted small">Examples: “Can I send a proposal for your review?” or “Can we schedule a 15-minute demo of the access-control review?”</p>
+        <div class="row" style="margin-top:12px"><button id="outreach-settings-save" class="primary">Save email wording</button><span id="outreach-settings-feedback" class="feedback" aria-live="polite"></span></div>
+      </div>
     </section>
   </main>
 </div>
@@ -1002,12 +1015,18 @@ async function loadSuppression() {
 /* ---------- Settings tab ---------- */
 
 async function loadSettings() {
-  const data = await api('/admin/ai/models');
+  const [data, wording] = await Promise.all([api('/admin/ai/models'), api('/admin/outreach/settings')]);
   const select = $('#ai-model');
   select.replaceChildren(...data.models.map((model) => el('option', { value: model }, model)));
   select.value = data.activeModel;
   $('#ai-model-meta').textContent =
     'Active: ' + data.activeModel + ' · Provider: ' + data.provider + ' · Fallback: ' + data.fallbackModel;
+  const settings = wording.settings;
+  $('#outreach-greeting').value = settings.greeting;
+  $('#outreach-fallback-greeting').value = settings.fallbackGreeting;
+  $('#outreach-signoff').value = settings.signoff;
+  $('#outreach-sender-name').value = settings.senderName;
+  $('#outreach-cta').value = settings.cta;
 }
 
 /* ---------- Tabs / init ---------- */
@@ -1106,6 +1125,27 @@ $('#ai-model-save').addEventListener('click', async () => {
   } finally {
     btn.disabled = false;
   }
+});
+$('#outreach-settings-save').addEventListener('click', async () => {
+  const btn = $('#outreach-settings-save');
+  const feedback = $('#outreach-settings-feedback');
+  btn.disabled = true;
+  feedback.className = 'feedback';
+  feedback.textContent = 'Saving…';
+  try {
+    await api('/admin/outreach/settings', { method: 'POST', body: {
+      greeting: $('#outreach-greeting').value,
+      fallbackGreeting: $('#outreach-fallback-greeting').value,
+      signoff: $('#outreach-signoff').value,
+      senderName: $('#outreach-sender-name').value,
+      cta: $('#outreach-cta').value,
+    } });
+    feedback.className = 'feedback success';
+    feedback.textContent = 'Saved. New drafts will use these values.';
+  } catch (err) {
+    feedback.className = 'feedback bad';
+    feedback.textContent = err.message;
+  } finally { btn.disabled = false; }
 });
 $('#a-save').addEventListener('click', async () => {
   try {
