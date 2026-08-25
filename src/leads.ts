@@ -15,6 +15,7 @@ interface PreparedLead {
   role: string | null;
   company: string | null;
   companyWebsite: string | null;
+  contactProfileUrl: string | null;
   industry: string | null;
   subIndustry: string | null;
   country: string | null;
@@ -34,6 +35,7 @@ function prepareLead(raw: unknown): PreparedLead {
     role: normalizeText(rec.role, 120) || null,
     company: normalizeText(rec.company, 160) || null,
     companyWebsite: normalizeText(rec.companyWebsite, 200) || null,
+    contactProfileUrl: normalizeText(rec.contactProfileUrl, 300) || null,
     industry: normalizeText(rec.industry, 120) || null,
     subIndustry: normalizeText(rec.subIndustry, 120) || null,
     country: normalizeText(rec.country, 100) || null,
@@ -99,8 +101,8 @@ export async function handleLeadsPost(body: Record<string, unknown>, env: Env): 
         .prepare(
           `INSERT INTO leads (
              id, email, domain, first_name, last_name, role, company, company_website,
-             industry, sub_industry, country, source, notes
-           ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)`
+             industry, sub_industry, country, contact_profile_url, source, notes
+           ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)`
         )
         .bind(
           id,
@@ -114,6 +116,7 @@ export async function handleLeadsPost(body: Record<string, unknown>, env: Env): 
           p.industry,
           p.subIndustry,
           p.country,
+          p.contactProfileUrl,
           p.source,
           p.notes
         )

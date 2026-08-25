@@ -6,6 +6,7 @@ import { runJson } from '../src/ai/client.ts';
 import type { Env } from '../src/env.ts';
 import { formatD1ExecScript } from '../src/util/sql.ts';
 import { extractEmailAddresses } from '../src/util/emailExtraction.ts';
+import { parseLeadTable } from '../src/util/leadImport.ts';
 import { validateDraftQuality } from '../src/services/draftQuality.ts';
 import { buildSafeFallbackDraft, improveDraftUntilSendable } from '../src/services/draftAutomation.ts';
 import { deliveryTestEnabled, priorOutboundBlocksDelivery } from '../src/services/deliveryTest.ts';
@@ -148,6 +149,18 @@ test('bulk lead text extraction keeps only unique email addresses', () => {
     'onome@example.com',
     'kelvin+test@sub.example.co.uk',
   ]);
+});
+
+test('structured TSV lead import preserves prospect fields and maps fit notes', () => {
+  const table = [
+    'first_name\tlast_name\tcompany\tcompany_domain\tposition\temail\tphone\tlocation\tlinkedin\tfit_note',
+    'Mojisola\tOloge\tHydrogen\thydrogenpay.com\tChief Risk Officer\tologemo@hydrogenpay.com\t+234 802\tNigeria\t[LinkedIn](https://linkedin.com/in/mojisola)\tSenior risk leader at a Nigerian fintech',
+  ].join('\n');
+  assert.deepEqual(parseLeadTable(table), [{
+    email: 'ologemo@hydrogenpay.com', firstName: 'Mojisola', lastName: 'Ologe', company: 'Hydrogen',
+    companyWebsite: 'https://hydrogenpay.com', role: 'Chief Risk Officer', country: 'Nigeria',
+    contactProfileUrl: 'https://linkedin.com/in/mojisola', notes: 'Phone: +234 802\nSenior risk leader at a Nigerian fintech',
+  }]);
 });
 
 test('renderer fixes greeting and signoff without rewriting the message', () => {

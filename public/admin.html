@@ -232,8 +232,8 @@
       <div class="card" style="max-width:560px">
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
           <input id="a-email" placeholder="Email *" style="grid-column:1/-1">
-          <textarea id="a-bulk-emails" placeholder="Paste multiple emails here (comma-separated or mixed text). Emails will be detected automatically." rows="4" style="grid-column:1/-1"></textarea>
-          <p class="muted small" style="grid-column:1/-1;margin:-4px 0 0">Use this box for a pasted list. Any non-email text is ignored; duplicates are removed.</p>
+          <textarea id="a-bulk-emails" placeholder="Paste a TSV/CSV table with headers, or mixed text containing emails. Structured columns like first_name, company_domain, position, linkedin, and fit_note are preserved." rows="6" style="grid-column:1/-1"></textarea>
+          <p class="muted small" style="grid-column:1/-1;margin:-4px 0 0">TSV/CSV rows use each row's details. Plain mixed text falls back to email extraction. Duplicates are removed.</p>
           <input id="a-first" placeholder="First name">
           <input id="a-last" placeholder="Last name">
           <input id="a-role" placeholder="Role (e.g. Head of IT)">
@@ -300,6 +300,47 @@ const state = {
 };
 
 const $ = (sel) => document.querySelector(sel);
+
+function splitLeadImportLine(line, delimiter) {
+  const cells = []; let current = ''; let quoted = false;
+  for (let i = 0; i < line.length; i++) {
+    const char = line[i];
+    if (char === '"' && line[i + 1] === '"' && quoted) { current += '"'; i++; }
+    else if (char === '"') quoted = !quoted;
+    else if (char === delimiter && !quoted) { cells.push(current.trim()); current = ''; }
+    else current += char;
+  }
+  cells.push(current.trim());
+  return cells;
+}
+
+function parseLeadTable(text) {
+  const lines = text.replace(/\r\n?/g, '\n').split('\n').filter((line) => line.trim());
+  if (lines.length < 2) return [];
+  const delimiter = lines[0].includes('\t') ? '\t' : ',';
+  const headers = splitLeadImportLine(lines[0], delimiter).map((header) =>
+    header.replace(/^\uFEFF/, '').trim().toLowerCase().replace(/[\s-]+/g, '_'));
+  const get = (row, ...keys) => keys.map((key) => row[key]).find((value) => value && value.trim())?.trim() || '';
+  return lines.slice(1).map((line) => {
+    const cells = splitLeadImportLine(line, delimiter);
+    const row = Object.fromEntries(headers.map((header, index) => [header, cells[index] || '']));
+    const phone = get(row, 'phone', 'telephone', 'mobile');
+    const fitNote = get(row, 'fit_note', 'fit_notes', 'notes', 'note');
+    const domain = get(row, 'company_domain', 'domain', 'website');
+    const linkedin = get(row, 'linkedin', 'linkedin_url', 'contact_profile_url').replace(/^\[.*\]\((https?:\/\/[^)]+)\)$/i, '$1');
+    return {
+      email: get(row, 'email').toLowerCase(),
+      firstName: get(row, 'first_name', 'firstname', 'first'),
+      lastName: get(row, 'last_name', 'lastname', 'last'),
+      company: get(row, 'company', 'company_name'),
+      companyWebsite: domain && !/^https?:\/\//i.test(domain) ? 'https://' + domain : domain,
+      role: get(row, 'position', 'role', 'title', 'job_title'),
+      country: get(row, 'location', 'country'),
+      contactProfileUrl: linkedin,
+      notes: [phone ? 'Phone: ' + phone : '', fitNote].filter(Boolean).join('\n'),
+    };
+  }).filter((lead) => lead.email);
+}
 
 /* Safe DOM builder - all data goes through textContent, never innerHTML. */
 function el(tag, attrs = {}, ...children) {
@@ -996,11 +1037,26 @@ $('#a-save').addEventListener('click', async () => {
       source: $('#a-source').value,
       notes: $('#a-notes').value.trim(),
     };
-    if (!emails.length) { toast('Enter an email or paste text containing email addresses', true); return; }
-    const r = await api('/leads', { method: 'POST', body: { leads: emails.map((email) => ({ email, ...leadDetails })) } });
+    const structuredRows = parseLeadTable(bulkText);
+    const leads = structuredRows.length
+      ? structuredRows.map((row) => ({
+        ...leadDetails,
+        email: row.email,
+        firstName: row.firstName || leadDetails.firstName,
+        lastName: row.lastName || leadDetails.lastName,
+        company: row.company || leadDetails.company,
+        companyWebsite: row.companyWebsite || leadDetails.companyWebsite,
+        role: row.role || leadDetails.role,
+        country: row.country || leadDetails.country,
+        contactProfileUrl: row.contactProfileUrl,
+        notes: [leadDetails.notes, row.notes].filter(Boolean).join('\n'),
+      }))
+      : emails.map((email) => ({ email, ...leadDetails }));
+    if (!leads.length) { toast('Enter an email or paste a TSV/CSV table with email addresses', true); return; }
+    const r = await api('/leads', { method: 'POST', body: { leads: leads } });
     const inserted = r.results.filter((row) => row.result === 'inserted').length;
     const duplicates = r.results.filter((row) => row.result === 'duplicate_email').length;
-    $('#a-result').textContent = `${inserted} added${duplicates ? `, ${duplicates} duplicate${duplicates === 1 ? '' : 's'}` : ''} (${emails.length} detected)`;
+    $('#a-result').textContent = `${inserted} added${duplicates ? `, ${duplicates} duplicate${duplicates === 1 ? '' : 's'}` : ''} (${leads.length} detected)`;
     if (inserted > 0) {
       ['#a-email','#a-bulk-emails','#a-first','#a-last','#a-role','#a-company','#a-website','#a-industry','#a-sub-industry','#a-country','#a-notes'].forEach((s) => { $(s).value = ''; });
       toast(`${inserted} lead${inserted === 1 ? '' : 's'} added`);
