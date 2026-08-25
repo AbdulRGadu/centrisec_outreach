@@ -8,6 +8,7 @@ export interface OutreachSettings {
   signoff: string;
   senderName: string;
   cta: string;
+  footerHtml: string;
 }
 
 export const DEFAULT_OUTREACH_SETTINGS: OutreachSettings = {
@@ -16,11 +17,13 @@ export const DEFAULT_OUTREACH_SETTINGS: OutreachSettings = {
   signoff: 'Best',
   senderName: 'Centrisec Team',
   cta: 'Would it be useful if I sent it over?',
+  footerHtml: '',
 };
 
 const KEYS = Object.keys(DEFAULT_OUTREACH_SETTINGS) as Array<keyof OutreachSettings>;
 
 function clean(key: keyof OutreachSettings, value: unknown): string {
+  if (key === 'footerHtml') return typeof value === 'string' ? value.replace(/\r\n?/g, '\n').trim().slice(0, 10_000) : '';
   const max = key === 'cta' ? 220 : 80;
   const result = normalizeInlineText(value, max);
   if (!result) throw new HttpError(400, `${key} cannot be empty`);

@@ -4,6 +4,7 @@ import { HttpError, isValidEmail, jsonResponse, normalizeMultiline, normalizeTex
 import { addSuppression, loadSuppressedKeys, suppressionKeyHit } from './suppression';
 import type { LeadRow, MessageRow } from './types';
 import { buildFooter, domainOf } from './util/text';
+import { getOutreachSettings } from './services/outreachSettings.ts';
 
 const SOURCES = new Set(['csv', 'sheets', 'form', 'directory', 'linkedin', 'referral', 'manual']);
 
@@ -191,7 +192,7 @@ export async function handleLeadGet(id: string, env: Env): Promise<Response> {
     .prepare('SELECT event, detail, created_at FROM lead_events WHERE lead_id = ?1 ORDER BY id DESC LIMIT 100')
     .bind(id)
     .all();
-  const footerPreview = buildFooter();
+  const footerPreview = (await getOutreachSettings(env.DB)).footerHtml || buildFooter();
   return jsonResponse({
     ok: true,
     lead,

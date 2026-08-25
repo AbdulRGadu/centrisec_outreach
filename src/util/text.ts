@@ -140,10 +140,12 @@ function escapeHtml(text: string): string {
 }
 
 /** Convert the approved plain-text body into HTML and append the email signature. */
-export function ensureFooter(body: string): string {
+export function ensureFooter(body: string, footerHtml = EMAIL_SIGNATURE_HTML): string {
   const normalized = normalizeEmailBody(body);
   const htmlBody = escapeHtml(normalized).replace(/\n\n/g, '</p><p style="margin:0 0 16px">').replace(/\n/g, '<br>');
-  return `<div style="font-family:Arial, Helvetica, sans-serif; font-size:14px; line-height:1.5; color:rgb(7, 21, 39)"><p style="margin:0 0 16px">${htmlBody}</p></div><br>${buildFooter()}`;
+  if (footerHtml === '') return `<div style="font-family:Arial, Helvetica, sans-serif; font-size:14px; line-height:1.5; color:rgb(7, 21, 39)"><p style="margin:0 0 16px">${htmlBody}</p></div>`;
+  const footer = footerHtml.trim();
+  return `<div style="font-family:Arial, Helvetica, sans-serif; font-size:14px; line-height:1.5; color:rgb(7, 21, 39)"><p style="margin:0 0 16px">${htmlBody}</p></div>${footer ? '<br>' + footer : ''}`;
 }
 
 /** Keep only the newly written portion of a reply, excluding common quoted-history markers. */

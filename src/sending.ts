@@ -6,6 +6,7 @@ import type { LeadRow, MessageRow } from './types';
 import { dayString, isInSendWindow, secondsToNextWindowOpen, weekStartString } from './util/time';
 import { ensureFooter } from './util/text';
 import { getAccessToken, sendMail, ZohoError } from './zoho';
+import { getOutreachSettings } from './services/outreachSettings.ts';
 
 export type SendOutcome =
   | { action: 'sent'; dryRun: boolean }
@@ -190,7 +191,7 @@ export async function processSend(env: Env, messageId: string): Promise<SendOutc
     return { action: 'ack', reason: 'claimed elsewhere' };
   }
 
-  const finalBody = ensureFooter(message.body ?? '');
+  const finalBody = ensureFooter(message.body ?? '', (await getOutreachSettings(env.DB)).footerHtml);
   const subject = message.subject ?? 'Centrisec';
 
   try {

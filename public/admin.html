@@ -295,6 +295,7 @@
           <label>Sender name<input id="outreach-sender-name" placeholder="Centrisec Team"></label>
           <label style="grid-column:1/-1">CTA style<select id="outreach-cta-mode"><option value="auto">Generate based on industry and role</option><option value="checklist">Ask to send a checklist</option><option value="demo">Suggest a 15-minute product demo</option><option value="proposal">Ask to send a proposal</option><option value="custom">Use custom CTA</option></select></label>
           <label id="outreach-custom-cta-wrap" style="grid-column:1/-1">Custom CTA question<textarea id="outreach-cta" rows="2" placeholder="Can we schedule a 15-minute demo of the product?"></textarea></label>
+          <label style="grid-column:1/-1">HTML footer (optional)<textarea id="outreach-footer-html" rows="6" placeholder="Leave empty to send no HTML footer"></textarea></label>
         </div>
         <p class="muted small">Choose auto for role-aware wording, or explicitly choose a checklist, demo, proposal, or custom CTA.</p>
         <div class="row" style="margin-top:12px"><button id="outreach-settings-save" class="primary">Save email wording</button><span id="outreach-settings-feedback" class="feedback" aria-live="polite"></span></div>
@@ -1028,6 +1029,7 @@ async function loadSettings() {
   $('#outreach-signoff').value = settings.signoff;
   $('#outreach-sender-name').value = settings.senderName;
   $('#outreach-cta').value = settings.cta;
+  $('#outreach-footer-html').value = settings.footerHtml || '';
   const presetModes = { 'Can I send the checklist for your review?': 'checklist', 'Can we schedule a 15-minute demo of the product?': 'demo', 'Can I send a proposal for your review?': 'proposal' };
   const ctaMode = $('#outreach-cta-mode');
   ctaMode.value = presetModes[settings.cta] || (settings.cta === 'Would it be useful if I sent it over?' ? 'auto' : 'custom');
@@ -1153,6 +1155,7 @@ $('#outreach-settings-save').addEventListener('click', async () => {
       signoff: $('#outreach-signoff').value,
       senderName: $('#outreach-sender-name').value,
       cta,
+      footerHtml: $('#outreach-footer-html').value,
     } });
     feedback.className = 'feedback success';
     feedback.textContent = 'Saved. New drafts will use these values.';
