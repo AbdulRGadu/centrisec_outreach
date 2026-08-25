@@ -287,16 +287,16 @@
       </div>
       <div class="card" style="max-width:720px;margin-top:14px">
         <h2 style="margin-top:0">Email wording</h2>
-        <p class="muted">These values are applied to new drafts and suggested replies. Keep the CTA to one clear next step.</p>
+        <p class="muted">These values are applied to new drafts and suggested replies. Known names are formatted as “Mr. Name”.</p>
         <div class="grid two">
           <label>Greeting with a name<input id="outreach-greeting" placeholder="Hi"></label>
           <label>Greeting without a name<input id="outreach-fallback-greeting" placeholder="Hello"></label>
-          <label>Signoff<input id="outreach-signoff" placeholder="Best"></label>
+          <label>Signoff<input id="outreach-signoff" placeholder="Best regards"></label>
           <label>Sender name<input id="outreach-sender-name" placeholder="Centrisec Team"></label>
           <label style="grid-column:1/-1">CTA style<select id="outreach-cta-mode"><option value="auto">Generate based on industry and role</option><option value="checklist">Ask to send a checklist</option><option value="demo">Suggest a 15-minute product demo</option><option value="proposal">Ask to send a proposal</option><option value="custom">Use custom CTA</option></select></label>
           <label id="outreach-custom-cta-wrap" style="grid-column:1/-1">Custom CTA question<textarea id="outreach-cta" rows="2" placeholder="Can we schedule a 15-minute demo of the product?"></textarea></label>
         </div>
-        <p class="muted small">Examples: “Can I send a proposal for your review?” or “Can we schedule a 15-minute demo of the access-control review?”</p>
+        <p class="muted small">Choose auto for role-aware wording, or explicitly choose a checklist, demo, proposal, or custom CTA.</p>
         <div class="row" style="margin-top:12px"><button id="outreach-settings-save" class="primary">Save email wording</button><span id="outreach-settings-feedback" class="feedback" aria-live="polite"></span></div>
       </div>
     </section>
