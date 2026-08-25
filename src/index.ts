@@ -100,6 +100,11 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
     if (action === 'model' && method === 'POST') return handleAiModelPost(await readJson(request), env);
   }
 
+  if (resource === 'admin' && id === 'outreach' && action === 'settings') {
+    if (method === 'GET') return handleOutreachSettingsGet(env.DB);
+    if (method === 'POST') return handleOutreachSettingsPost(await readJson(request), env.DB);
+  }
+
   if (resource === 'admin' && id === 'replies' && action === 'debug' && method === 'GET') {
     return handleRepliesDebug(env);
   }

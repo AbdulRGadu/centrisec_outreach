@@ -6,7 +6,7 @@ const TRAILING_SIGNOFF = /(?:\n\s*)+(?:Best|Best regards|Regards|Kind regards|Th
 
 export function expectedGreeting(lead: Pick<LeadRow, 'first_name'>, settings: OutreachSettings = DEFAULT_OUTREACH_SETTINGS): string {
   const firstName = normalizeInlineText(lead.first_name, 80);
-  return firstName ? `${settings.greeting} ${firstName},` : `${settings.fallbackGreeting},`;
+  return firstName ? `${settings.greeting} Mr. ${firstName},` : `${settings.fallbackGreeting},`;
 }
 
 export function normalizeDraftSubject(subject: string): string {

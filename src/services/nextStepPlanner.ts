@@ -73,7 +73,7 @@ export function salesStageFor(classification: string): string {
 }
 
 function greeting(lead: LeadRow | null, settings: OutreachSettings): string {
-  return lead?.first_name?.trim() ? `${settings.greeting} ${lead.first_name.trim()},` : `${settings.fallbackGreeting},`;
+  return lead?.first_name?.trim() ? `${settings.greeting} Mr. ${lead.first_name.trim()},` : `${settings.fallbackGreeting},`;
 }
 
 function signoff(settings: OutreachSettings): string {

@@ -12,7 +12,7 @@ test('positive interest produces a checklist next step and review-only reply', (
   });
   assert.equal(plan.next_action, 'send_checklist_or_offer_walkthrough');
   assert.equal(plan.sales_stage, 'engaged');
-  assert.match(plan.suggested_reply, /^Hi Ada,/);
+  assert.match(plan.suggested_reply, /^Hi Mr. Ada,/);
   assert.match(plan.suggested_reply, /15-minute walkthrough/);
   assert.match(plan.suggested_reply, /Best,\nCentrisec Team$/);
 });

@@ -31,7 +31,7 @@ function lead(values: Partial<LeadRow> = {}): LeadRow {
   };
 }
 
-const validBody = `Hi Ada,
+const validBody = `Hi Mr. Ada,
 
 I’m reaching out from Centrisec.
 
@@ -166,10 +166,10 @@ test('structured TSV lead import preserves prospect fields and maps fit notes', 
 
 test('renderer fixes greeting and signoff without rewriting the message', () => {
   const rendered = renderDraftEmail(
-    validBody.replace('Hi Ada,', 'Dear Ada,').replace('Best,\nCentrisec Team', 'Regards,\nCentrisec'),
+    validBody.replace('Hi Mr. Ada,', 'Dear Ada,').replace('Best,\nCentrisec Team', 'Regards,\nCentrisec'),
     lead()
   );
-  assert.match(rendered, /^Hi Ada,\n\n/);
+  assert.match(rendered, /^Hi Mr. Ada,\n\n/);
   assert.match(rendered, /\n\nBest,\nCentrisec Team$/);
   assert.equal((rendered.match(/^Centrisec Team$/gm) ?? []).length, 1);
 });
@@ -311,7 +311,7 @@ test('custom email wording flows into the rendered draft and CTA strategy', () =
   const prospect = lead();
   const plan = buildPersonalizationPlan(prospect, settings);
   const draft = buildSafeFallbackDraft(prospect, plan);
-  assert.match(draft.body, /^Goodday Ada,/);
+  assert.match(draft.body, /^Goodday Mr. Ada,/);
   assert.match(draft.body, /Can I send a proposal for your review\?/);
   assert.match(draft.body, /Best regards,\nGadu Abdul$/);
 });
