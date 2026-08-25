@@ -85,7 +85,8 @@ export function validateDraftQuality(
     warnings.push('CTA does not match the recommended low-friction next step.');
   }
   if (questions !== 1 || countCtas(raw) !== 1) warnings.push('Body must contain exactly one CTA question.');
-  if (!/^Best,\nCentrisec Team$/.test(blocks[6] ?? '')) warnings.push('Signoff must appear exactly once as Best, then Centrisec Team.');
+  const expectedSignoff = settings.senderName ? `${settings.signoff},\n${settings.senderName}` : `${settings.signoff},`;
+  if ((blocks[6] ?? '') !== expectedSignoff) warnings.push('Signoff must appear exactly once with the configured signoff and footer.');
 
   if (/since Centrisec operates/i.test(raw) && !companyIsCentrisec) {
     warnings.push('Centrisec is incorrectly described as the prospect.');
@@ -107,8 +108,8 @@ export function validateDraftQuality(
   }
   if (/^\s*\u2014\s*$/m.test(raw)) warnings.push('A standalone em dash separator is present.');
   const signoffLines = (raw.match(new RegExp(`^${escapeRegExp(settings.signoff)},?$`, 'gim')) ?? []).length;
-  const senderLines = (raw.match(new RegExp(`^${escapeRegExp(settings.senderName)}$`, 'gim')) ?? []).length;
-  if (signoffLines !== 1 || senderLines !== 1) warnings.push('Signoff is missing or duplicated.');
+  const senderLines = settings.senderName ? (raw.match(new RegExp(`^${escapeRegExp(settings.senderName)}$`, 'gim')) ?? []).length : 0;
+  if (signoffLines !== 1 || (settings.senderName ? senderLines !== 1 : senderLines !== 0)) warnings.push('Signoff is missing or duplicated.');
   if ((raw.match(/\bCentrisec\b/gi) ?? []).length > 2) warnings.push('Centrisec is mentioned more often than needed.');
   if (VAGUE_FILLER.test(raw)) warnings.push('Draft uses vague filler without practical detail.');
   if (/\b(?:guaranteed|limited time|act now|urgent(?:ly)?|final chance|before it['\u2019]s too late)\b/i.test(raw)) {

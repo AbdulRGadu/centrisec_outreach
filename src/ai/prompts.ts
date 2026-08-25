@@ -144,8 +144,7 @@ export function buildDraftMessages(plan: DraftPersonalizationPlan): ChatMessage[
         `- Avoid hype, fear, fake urgency, unsupported personalisation, and brochure language.\n` +
         `- Use the recommended offer. Do not ask for a meeting unless the strategy recommends a walkthrough.\n` +
         `- Sign off exactly once with:\n` +
-        `  ${plan.messaging.signoff},\n` +
-        `  ${plan.messaging.senderName}\n\n` +
+        `  ${plan.messaging.signoff},${plan.messaging.senderName ? `\n  ${plan.messaging.senderName}` : ''}\n\n` +
         `Return ONLY a JSON object: {"subject": ..., "body": ...}.`,
     },
     {
@@ -182,7 +181,7 @@ export function buildDraftRepairMessages(args: {
         `80-140 body words; concrete practical help; supported sector relevance; one useful offer; ` +
         `one exact recommended CTA; no invented claims, hype, footer, unsubscribe copy, or separator. ` +
         `80-140 words, the exact CTA "${args.plan.strategy.recommended_cta}", no other question, ` +
-        `and the exact final signoff "${args.plan.messaging.signoff},\\n${args.plan.messaging.senderName}". Keep the practical help and ` +
+        `and the exact final signoff "${args.plan.messaging.signoff},${args.plan.messaging.senderName ? `\\n${args.plan.messaging.senderName}` : ''}". Keep the practical help and ` +
         `sector relevance concrete. Return ONLY the JSON object.`,
     },
   ];

@@ -14,7 +14,7 @@ test('positive interest produces a checklist next step and review-only reply', (
   assert.equal(plan.sales_stage, 'engaged');
   assert.match(plan.suggested_reply, /^Hi Mr. Ada,/);
   assert.match(plan.suggested_reply, /15-minute walkthrough/);
-  assert.match(plan.suggested_reply, /Best,\nCentrisec Team$/);
+  assert.match(plan.suggested_reply, /Best regards,$/);
 });
 
 test('more-info reply contains three useful bullets and one soft CTA', () => {

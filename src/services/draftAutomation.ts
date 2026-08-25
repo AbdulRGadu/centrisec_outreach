@@ -72,7 +72,7 @@ export function buildSafeFallbackDraft(lead: LeadRow, plan: DraftPersonalization
     plan.strategy.likely_security_context,
     offerSentence(plan),
     plan.strategy.recommended_cta,
-    `${plan.messaging.signoff},\n${plan.messaging.senderName}`,
+    plan.messaging.senderName ? `${plan.messaging.signoff},\n${plan.messaging.senderName}` : `${plan.messaging.signoff},`,
   ].join('\n\n');
   return {
     subject: /walkthrough/i.test(plan.strategy.recommended_offer)

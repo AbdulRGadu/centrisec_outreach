@@ -77,7 +77,7 @@ function greeting(lead: LeadRow | null, settings: OutreachSettings): string {
 }
 
 function signoff(settings: OutreachSettings): string {
-  return `${settings.signoff},\n${settings.senderName}`;
+  return settings.senderName ? `${settings.signoff},\n${settings.senderName}` : `${settings.signoff},`;
 }
 
 function referralContact(replyBody: string): string {

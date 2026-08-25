@@ -43,8 +43,7 @@ I can send a short access control and incident readiness checklist that your tea
 
 Would it be useful if I sent over the checklist for your team to review?
 
-Best,
-Centrisec Team`;
+Best regards,`;
 
 test('a complete fintech draft passes the conversion quality gate', () => {
   const row = lead();
@@ -166,12 +165,12 @@ test('structured TSV lead import preserves prospect fields and maps fit notes', 
 
 test('renderer fixes greeting and signoff without rewriting the message', () => {
   const rendered = renderDraftEmail(
-    validBody.replace('Hi Mr. Ada,', 'Dear Ada,').replace('Best,\nCentrisec Team', 'Regards,\nCentrisec'),
+    validBody.replace('Hi Mr. Ada,', 'Dear Ada,').replace('Best regards,', 'Regards,'),
     lead()
   );
   assert.match(rendered, /^Hi Mr. Ada,\n\n/);
-  assert.match(rendered, /\n\nBest,\nCentrisec Team$/);
-  assert.equal((rendered.match(/^Centrisec Team$/gm) ?? []).length, 1);
+  assert.match(rendered, /\n\nBest regards,$/);
+  assert.equal((rendered.match(/^Centrisec Team$/gm) ?? []).length, 0);
 });
 
 test('quality gate rejects thin copy, multiple questions, and unsupported sector claims', () => {
