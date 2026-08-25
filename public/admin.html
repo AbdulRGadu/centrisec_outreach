@@ -232,6 +232,8 @@
       <div class="card" style="max-width:560px">
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
           <input id="a-email" placeholder="Email *" style="grid-column:1/-1">
+          <textarea id="a-bulk-emails" placeholder="Paste multiple emails here (comma-separated or mixed text). Emails will be detected automatically." rows="4" style="grid-column:1/-1"></textarea>
+          <p class="muted small" style="grid-column:1/-1;margin:-4px 0 0">Use this box for a pasted list. Any non-email text is ignored; duplicates are removed.</p>
           <input id="a-first" placeholder="First name">
           <input id="a-last" placeholder="Last name">
           <input id="a-role" placeholder="Role (e.g. Head of IT)">
@@ -977,8 +979,12 @@ $('#ai-model-save').addEventListener('click', async () => {
 });
 $('#a-save').addEventListener('click', async () => {
   try {
-    const lead = {
-      email: $('#a-email').value.trim(),
+    const bulkText = $('#a-bulk-emails').value.trim();
+    const emailPattern = /[A-Z0-9](?:[A-Z0-9._%+-]*[A-Z0-9])?@[A-Z0-9](?:[A-Z0-9.-]*[A-Z0-9])?\.[A-Z]{2,}/gi;
+    const detectedEmails = [...new Set((bulkText.match(emailPattern) || []).map((email) => email.toLowerCase()))];
+    const singleEmail = $('#a-email').value.trim().toLowerCase();
+    const emails = detectedEmails.length ? detectedEmails : (singleEmail ? [singleEmail] : []);
+    const leadDetails = {
       firstName: $('#a-first').value.trim(),
       lastName: $('#a-last').value.trim(),
       role: $('#a-role').value.trim(),
@@ -990,16 +996,17 @@ $('#a-save').addEventListener('click', async () => {
       source: $('#a-source').value,
       notes: $('#a-notes').value.trim(),
     };
-    if (!lead.email) { toast('Email is required', true); return; }
-    const r = await api('/leads', { method: 'POST', body: { leads: [lead] } });
-    const row = r.results[0];
-    $('#a-result').textContent = row.result + (row.domainExists ? ' (another contact at this domain exists)' : '');
-    if (row.result === 'inserted') {
-      ['#a-email','#a-first','#a-last','#a-role','#a-company','#a-website','#a-industry','#a-sub-industry','#a-country','#a-notes'].forEach((s) => { $(s).value = ''; });
-      toast('Lead added');
+    if (!emails.length) { toast('Enter an email or paste text containing email addresses', true); return; }
+    const r = await api('/leads', { method: 'POST', body: { leads: emails.map((email) => ({ email, ...leadDetails })) } });
+    const inserted = r.results.filter((row) => row.result === 'inserted').length;
+    const duplicates = r.results.filter((row) => row.result === 'duplicate_email').length;
+    $('#a-result').textContent = `${inserted} added${duplicates ? `, ${duplicates} duplicate${duplicates === 1 ? '' : 's'}` : ''} (${emails.length} detected)`;
+    if (inserted > 0) {
+      ['#a-email','#a-bulk-emails','#a-first','#a-last','#a-role','#a-company','#a-website','#a-industry','#a-sub-industry','#a-country','#a-notes'].forEach((s) => { $(s).value = ''; });
+      toast(`${inserted} lead${inserted === 1 ? '' : 's'} added`);
       await refreshStats();
     } else {
-      toast('Not added: ' + row.result, true);
+      toast('No new leads were added', true);
     }
   } catch (err) { toast(err.message, true); }
 });

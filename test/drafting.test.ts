@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { runJson } from '../src/ai/client.ts';
 import type { Env } from '../src/env.ts';
 import { formatD1ExecScript } from '../src/util/sql.ts';
+import { extractEmailAddresses } from '../src/util/emailExtraction.ts';
 import { validateDraftQuality } from '../src/services/draftQuality.ts';
 import { buildSafeFallbackDraft, improveDraftUntilSendable } from '../src/services/draftAutomation.ts';
 import { deliveryTestEnabled, priorOutboundBlocksDelivery } from '../src/services/deliveryTest.ts';
@@ -138,6 +139,15 @@ test('public landing page is informational and does not collect credentials', ()
   assert.match(landing, /Centrisec Campaign Console/);
   assert.match(landing, /Open internal console/);
   assert.doesNotMatch(landing, /input|password|API key|PIN/i);
+});
+
+test('bulk lead text extraction keeps only unique email addresses', () => {
+  const text = 'Abdul, abdul@example.com; Notes: Onome <ONOME@example.com>, invalid@, and abdul@example.com. Kelvin kelvin+test@sub.example.co.uk.';
+  assert.deepEqual(extractEmailAddresses(text), [
+    'abdul@example.com',
+    'onome@example.com',
+    'kelvin+test@sub.example.co.uk',
+  ]);
 });
 
 test('renderer fixes greeting and signoff without rewriting the message', () => {
