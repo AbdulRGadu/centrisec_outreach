@@ -96,6 +96,29 @@ export interface SendMailResult {
   internetMessageId: string | null;
 }
 
+export interface SendMailArgs {
+  to: string;
+  subject: string;
+  content: string;
+  cc?: string;
+}
+
+/**
+ * Keeps the provider payload explicit and testable. Zoho documents ccAddress
+ * for its send-message endpoint; omit it when no internal mailbox is set.
+ */
+export function buildSendMailPayload(env: Env, args: SendMailArgs): Record<string, string> {
+  return {
+    fromAddress: env.FROM_EMAIL,
+    toAddress: args.to,
+    ...(args.cc?.trim() ? { ccAddress: args.cc.trim() } : {}),
+    subject: args.subject,
+    content: args.content,
+    mailFormat: 'html',
+    askReceipt: 'no',
+  };
+}
+
 /**
  * Send one HTML email via the Zoho Mail API.
  * With DRY_RUN=true it logs and succeeds without touching the network -
@@ -103,7 +126,7 @@ export interface SendMailResult {
  */
 export async function sendMail(
   env: Env,
-  args: { to: string; subject: string; content: string }
+  args: SendMailArgs
 ): Promise<SendMailResult> {
   if (isDryRun(env)) {
     const domain = args.to.slice(args.to.lastIndexOf('@'));
@@ -120,14 +143,7 @@ export async function sendMail(
         Authorization: `Zoho-oauthtoken ${token}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({
-        fromAddress: env.FROM_EMAIL,
-        toAddress: args.to,
-        subject: args.subject,
-        content: args.content,
-        mailFormat: 'html',
-        askReceipt: 'no',
-      }),
+      body: JSON.stringify(buildSendMailPayload(env, args)),
     });
   } catch (err) {
     throw new ZohoError('transient', 0, `Zoho network error: ${err instanceof Error ? err.message : String(err)}`);

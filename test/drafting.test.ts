@@ -318,3 +318,13 @@ test('custom email wording flows into the rendered draft and CTA strategy', () =
   assert.match(draft.body, /Can I send a proposal for your review\?/);
   assert.match(draft.body, /Best regards,\nGadu Abdul$/);
 });
+
+test('outbound outreach copies the configured Centrisec inbox without changing the prospect recipient', () => {
+  const config = readFileSync(new URL('../wrangler.jsonc', import.meta.url), 'utf8');
+  const sender = readFileSync(new URL('../src/sending.ts', import.meta.url), 'utf8');
+  const provider = readFileSync(new URL('../src/zoho.ts', import.meta.url), 'utf8');
+  assert.match(config, /"OUTREACH_CC_EMAIL": "info@centrisec\.com"/);
+  assert.match(sender, /cc: env\.OUTREACH_CC_EMAIL/);
+  assert.match(provider, /ccAddress: args\.cc\.trim\(\)/);
+  assert.match(provider, /toAddress: args\.to/);
+});

@@ -404,7 +404,10 @@ async function applyReplyOutcome(
 async function createReferredLead(env: Env, originalLead: LeadRow, replyBody: string, sourceMessageId: string): Promise<void> {
   const candidates = replyBody.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi) ?? [];
   const email = candidates.map((value) => value.toLowerCase()).find(
-    (value) => value !== originalLead.email && value !== env.FROM_EMAIL.toLowerCase() && isValidEmail(value)
+    (value) => value !== originalLead.email
+      && value !== env.FROM_EMAIL.toLowerCase()
+      && value !== env.OUTREACH_CC_EMAIL.toLowerCase()
+      && isValidEmail(value)
   );
   if (!email || await isSuppressed(env.DB, email, domainOf(email))) return;
   const id = crypto.randomUUID();

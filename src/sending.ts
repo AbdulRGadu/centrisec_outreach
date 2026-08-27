@@ -250,12 +250,13 @@ async function trySendWithAuthRetry(
   subject: string,
   content: string
 ): Promise<{ dryRun: boolean; providerMessageId: string | null; internetMessageId: string | null }> {
+  const args = { to, subject, content, cc: env.OUTREACH_CC_EMAIL };
   try {
-    return await sendMail(env, { to, subject, content });
+    return await sendMail(env, args);
   } catch (err) {
     if (err instanceof ZohoError && err.kind === 'auth') {
       await getAccessToken(env, true);
-      return sendMail(env, { to, subject, content });
+      return sendMail(env, args);
     }
     throw err;
   }

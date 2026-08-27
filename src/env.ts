@@ -17,6 +17,8 @@ export interface Env {
   ZOHO_ACCOUNT_ID: string;
   FROM_EMAIL: string;
   FROM_NAME: string;
+  /** A visible internal copy on every outbound outreach email. */
+  OUTREACH_CC_EMAIL: string;
   PUBLIC_BASE_URL: string;
   PHYSICAL_ADDRESS: string;
   DAILY_SEND_CAP: string;
