@@ -1,4 +1,5 @@
 import type { D1Database } from '@cloudflare/workers-types';
+import type { Env } from '../env.ts';
 import { HttpError, jsonResponse } from '../http.ts';
 import { normalizeInlineText } from '../util/text.ts';
 
@@ -7,6 +8,8 @@ export interface OutreachSettings {
   fallbackGreeting: string;
   signoff: string;
   senderName: string;
+  /** Optional Zoho-approved From address. Empty uses the deployed default. */
+  senderEmail: string;
   cta: string;
   footerHtml: string;
 }
@@ -16,6 +19,7 @@ export const DEFAULT_OUTREACH_SETTINGS: OutreachSettings = {
   fallbackGreeting: 'Hello',
   signoff: 'Best regards',
   senderName: '',
+  senderEmail: '',
   cta: 'Would it be useful if I sent it over?',
   footerHtml: '',
 };
@@ -24,8 +28,13 @@ const KEYS = Object.keys(DEFAULT_OUTREACH_SETTINGS) as Array<keyof OutreachSetti
 
 function clean(key: keyof OutreachSettings, value: unknown): string {
   if (key === 'footerHtml') return typeof value === 'string' ? value.replace(/\r\n?/g, '\n').trim().slice(0, 10_000) : '';
-  const max = key === 'cta' ? 220 : 80;
+  const max = key === 'cta' ? 220 : key === 'senderEmail' ? 254 : 80;
   const result = normalizeInlineText(value, max);
+  if (key === 'senderEmail') {
+    if (!result) return '';
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(result)) throw new HttpError(400, 'senderEmail must be a valid email address');
+    return result.toLowerCase();
+  }
   if (key === 'senderName' && result.toLowerCase() === 'centrisec team') return '';
   if (!result && key !== 'senderName') throw new HttpError(400, `${key} cannot be empty`);
   if (key === 'cta' && (result.match(/\?/g) ?? []).length > 1) {
@@ -45,6 +54,11 @@ export async function getOutreachSettings(db: D1Database): Promise<OutreachSetti
   })) as unknown as OutreachSettings;
 }
 
+/** Resolve the actual sender without exposing a deployment-only default in D1. */
+export function effectiveSenderEmail(settings: OutreachSettings, env: Pick<Env, 'FROM_EMAIL'>): string {
+  return settings.senderEmail || env.FROM_EMAIL;
+}
+
 export async function updateOutreachSettings(body: Record<string, unknown>, db: D1Database): Promise<OutreachSettings> {
   const current = await getOutreachSettings(db);
   const next = { ...current };
@@ -58,10 +72,12 @@ export async function updateOutreachSettings(body: Record<string, unknown>, db: 
   return next;
 }
 
-export async function handleOutreachSettingsGet(db: D1Database): Promise<Response> {
-  return jsonResponse({ ok: true, settings: await getOutreachSettings(db) });
+export async function handleOutreachSettingsGet(db: D1Database, env: Pick<Env, 'FROM_EMAIL'>): Promise<Response> {
+  const settings = await getOutreachSettings(db);
+  return jsonResponse({ ok: true, settings: { ...settings, senderEmail: effectiveSenderEmail(settings, env) } });
 }
 
-export async function handleOutreachSettingsPost(body: Record<string, unknown>, db: D1Database): Promise<Response> {
-  return jsonResponse({ ok: true, settings: await updateOutreachSettings(body, db) });
+export async function handleOutreachSettingsPost(body: Record<string, unknown>, db: D1Database, env: Pick<Env, 'FROM_EMAIL'>): Promise<Response> {
+  const settings = await updateOutreachSettings(body, db);
+  return jsonResponse({ ok: true, settings: { ...settings, senderEmail: effectiveSenderEmail(settings, env) } });
 }

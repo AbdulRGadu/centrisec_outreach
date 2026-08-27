@@ -6,7 +6,7 @@ import type { LeadRow, MessageRow } from './types';
 import { dayString, isInSendWindow, secondsToNextWindowOpen, weekStartString } from './util/time';
 import { ensureFooter } from './util/text';
 import { getAccessToken, sendMail, ZohoError } from './zoho';
-import { getOutreachSettings } from './services/outreachSettings.ts';
+import { effectiveSenderEmail, getOutreachSettings } from './services/outreachSettings.ts';
 
 export type SendOutcome =
   | { action: 'sent'; dryRun: boolean }
@@ -250,7 +250,12 @@ async function trySendWithAuthRetry(
   subject: string,
   content: string
 ): Promise<{ dryRun: boolean; providerMessageId: string | null; internetMessageId: string | null }> {
-  const args = { to, subject, content, cc: env.OUTREACH_CC_EMAIL };
+  const settings = await getOutreachSettings(env.DB);
+  const from = effectiveSenderEmail(settings, env);
+  const copyTo = env.OUTREACH_CC_EMAIL.trim().toLowerCase() === from.trim().toLowerCase()
+    ? undefined
+    : env.OUTREACH_CC_EMAIL;
+  const args = { to, subject, content, from, cc: copyTo };
   try {
     return await sendMail(env, args);
   } catch (err) {

@@ -5,7 +5,7 @@ n8n transports inbox data and notifications. The Worker remains the database of 
 ## Zoho inbox polling workflow
 
 1. Create an n8n credential named `n8n webhook secret` with header name `x-n8n-webhook-secret` and the same value as the Worker's `N8N_WEBHOOK_SECRET` secret.
-2. Poll only the Centrisec inbox `INBOX` for unread messages every 2-5 minutes. Exclude `admin@centrisec.com`, delivery folders, and messages already carrying your `centrisec-processed` label. Fetch plain text plus `Message-ID`, `In-Reply-To`, and `References` headers.
+2. Poll only the shared reply inbox `info@centrisec.com` (`INBOX`) for unread messages every 2-5 minutes. Exclude `info@centrisec.com`, delivery folders, and messages already carrying your `centrisec-processed` label. Fetch plain text plus `Message-ID`, `In-Reply-To`, and `References` headers.
 3. POST each message to `https://<worker>/replies/ingest` using the payload below. Treat only an HTTP 2xx response with `ok: true` as success.
 4. After that successful response, mark the Zoho message read and apply a `centrisec-processed` label. Never mark it processed before the Worker confirms storage.
 5. Branch on the returned `classification` and `isPositive`. Notify the team for positive replies and `manual_review`; never send the suggested reply automatically.

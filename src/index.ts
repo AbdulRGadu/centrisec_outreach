@@ -101,8 +101,8 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
   }
 
   if (resource === 'admin' && id === 'outreach' && action === 'settings') {
-    if (method === 'GET') return handleOutreachSettingsGet(env.DB);
-    if (method === 'POST') return handleOutreachSettingsPost(await readJson(request), env.DB);
+    if (method === 'GET') return handleOutreachSettingsGet(env.DB, env);
+    if (method === 'POST') return handleOutreachSettingsPost(await readJson(request), env.DB, env);
   }
 
   if (resource === 'admin' && id === 'replies' && action === 'debug' && method === 'GET') {
@@ -152,8 +152,8 @@ export default {
       }
       if (url.pathname === '/admin/outreach/settings') {
         if (!(await isAuthorized(request, env))) return jsonResponse({ ok: false, error: 'Unauthorized' }, 401);
-        if (request.method === 'GET') return handleOutreachSettingsGet(env.DB);
-        if (request.method === 'POST') return handleOutreachSettingsPost(await readJson(request), env.DB);
+        if (request.method === 'GET') return handleOutreachSettingsGet(env.DB, env);
+        if (request.method === 'POST') return handleOutreachSettingsPost(await readJson(request), env.DB, env);
         throw new HttpError(405, 'Method not allowed');
       }
       if (url.pathname === '/api' || url.pathname.startsWith('/api/')) {

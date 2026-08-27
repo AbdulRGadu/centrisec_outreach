@@ -1,6 +1,6 @@
 # Zoho Mail API setup (one time)
 
-The Worker sends cold emails from a real mailbox (`admin@centrisec.com`) through the
+The Worker sends cold emails from the shared mailbox (`info@centrisec.com`) through the
 Zoho Mail API. That requires a Zoho OAuth "Self Client" and a refresh token. Budget
 ~10 minutes.
 
@@ -66,7 +66,7 @@ only when you actually want local runs to send real email).
 1. Zoho Mail → **Settings → Mail Accounts → IMAP** → enable IMAP access.
 2. Zoho **My Account → Security → App Passwords** → generate one named `n8n`.
 3. In n8n, create an IMAP credential: host `imap.zoho.com`, port `993`, SSL on,
-   user `admin@centrisec.com`, password = the app password.
+   user `info@centrisec.com`, password = the app password. This is the shared reply inbox.
 
 ## Troubleshooting
 

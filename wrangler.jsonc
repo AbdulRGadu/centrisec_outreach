@@ -51,7 +51,7 @@
     "ZOHO_MAIL_BASE": "https://mail.zoho.com",
     "ZOHO_ACCOUNTS_BASE": "https://accounts.zoho.com",
     "ZOHO_ACCOUNT_ID": "3635899000000008002",
-    "FROM_EMAIL": "admin@centrisec.com",
+    "FROM_EMAIL": "info@centrisec.com",
     "FROM_NAME": "Centrisec Team",
     "OUTREACH_CC_EMAIL": "info@centrisec.com",
     "PUBLIC_BASE_URL": "https://centrisec-outreach.centrisec-com.workers.dev",

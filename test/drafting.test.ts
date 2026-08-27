@@ -323,8 +323,22 @@ test('outbound outreach copies the configured Centrisec inbox without changing t
   const config = readFileSync(new URL('../wrangler.jsonc', import.meta.url), 'utf8');
   const sender = readFileSync(new URL('../src/sending.ts', import.meta.url), 'utf8');
   const provider = readFileSync(new URL('../src/zoho.ts', import.meta.url), 'utf8');
+  assert.match(config, /"FROM_EMAIL": "info@centrisec\.com"/);
   assert.match(config, /"OUTREACH_CC_EMAIL": "info@centrisec\.com"/);
-  assert.match(sender, /cc: env\.OUTREACH_CC_EMAIL/);
+  assert.match(sender, /: env\.OUTREACH_CC_EMAIL;/);
+  assert.match(sender, /effectiveSenderEmail\(settings, env\)/);
   assert.match(provider, /ccAddress: args\.cc\.trim\(\)/);
+  assert.match(provider, /fromAddress: args\.from\?\.trim\(\) \|\| env\.FROM_EMAIL/);
   assert.match(provider, /toAddress: args\.to/);
+});
+
+test('settings expose a configurable sender and render the HTML footer inside a sandboxed preview', () => {
+  const settings = readFileSync(new URL('../src/services/outreachSettings.ts', import.meta.url), 'utf8');
+  const dashboard = readFileSync(new URL('../public/admin.html', import.meta.url), 'utf8');
+  assert.match(settings, /senderEmail: string/);
+  assert.match(settings, /senderEmail must be a valid email address/);
+  assert.match(dashboard, /id="outreach-sender-email"/);
+  assert.match(dashboard, /id="outreach-footer-preview"/);
+  assert.match(dashboard, /sandbox=""/);
+  assert.match(dashboard, /updateFooterPreview/);
 });

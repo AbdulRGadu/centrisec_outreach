@@ -101,6 +101,7 @@ export interface SendMailArgs {
   subject: string;
   content: string;
   cc?: string;
+  from?: string;
 }
 
 /**
@@ -109,7 +110,7 @@ export interface SendMailArgs {
  */
 export function buildSendMailPayload(env: Env, args: SendMailArgs): Record<string, string> {
   return {
-    fromAddress: env.FROM_EMAIL,
+    fromAddress: args.from?.trim() || env.FROM_EMAIL,
     toAddress: args.to,
     ...(args.cc?.trim() ? { ccAddress: args.cc.trim() } : {}),
     subject: args.subject,

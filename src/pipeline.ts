@@ -11,7 +11,7 @@ import { deliveryTestEnabled, priorOutboundBlocksDelivery } from './services/del
 import { segmentLeadRow } from './services/leadSegmentation';
 import { planInitialNextStep } from './services/nextStepPlanner';
 import { buildPersonalizationPlan } from './services/personalization';
-import { getOutreachSettings } from './services/outreachSettings';
+import { effectiveSenderEmail, getOutreachSettings } from './services/outreachSettings';
 import { compatibleLeadSegment } from './schema';
 import { isSuppressed } from './suppression';
 import type { LeadRow, MessageRow } from './types';
@@ -87,7 +87,8 @@ export async function draftLead(env: Env, lead: LeadRow, opts?: { force?: boolea
       .first<MessageRow>();
     if (current) return current;
   }
-  const plan = buildPersonalizationPlan(lead, await getOutreachSettings(env.DB));
+  const outreachSettings = await getOutreachSettings(env.DB);
+  const plan = buildPersonalizationPlan(lead, outreachSettings);
   const nextStepPlan = planInitialNextStep(plan.strategy);
   const storedSegment = await compatibleLeadSegment(env.DB, plan.strategy.segment);
   await env.DB.prepare(
@@ -155,7 +156,7 @@ export async function draftLead(env: Env, lead: LeadRow, opts?: { force?: boolea
       status,
       normalizedSubject,
       normalizedBody,
-      env.FROM_EMAIL,
+      effectiveSenderEmail(outreachSettings, env),
       lead.email,
       model,
       PROMPT_VERSION,

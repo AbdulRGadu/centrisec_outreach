@@ -298,11 +298,13 @@
           <label>Greeting without a name<input id="outreach-fallback-greeting" placeholder="Hello"></label>
           <label>Signoff<input id="outreach-signoff" placeholder="Best regards"></label>
           <label>Optional sender line<input id="outreach-sender-name" placeholder="Leave empty to use only the HTML footer"></label>
+          <label style="grid-column:1/-1">Sender email<input id="outreach-sender-email" type="email" placeholder="info@centrisec.com" autocomplete="email"></label>
           <label style="grid-column:1/-1">CTA style<select id="outreach-cta-mode"><option value="auto">Generate based on industry and role</option><option value="checklist">Ask to send a checklist</option><option value="demo">Suggest a 15-minute product demo</option><option value="proposal">Ask to send a proposal</option><option value="custom">Use custom CTA</option></select></label>
           <label id="outreach-custom-cta-wrap" style="grid-column:1/-1">Custom CTA question<textarea id="outreach-cta" rows="2" placeholder="Can we schedule a 15-minute demo of the product?"></textarea></label>
           <label style="grid-column:1/-1">HTML footer (optional)<textarea id="outreach-footer-html" rows="6" placeholder="Leave empty to send no HTML footer"></textarea></label>
         </div>
-        <p class="muted small">Choose auto for role-aware wording, or explicitly choose a checklist, demo, proposal, or custom CTA.</p>
+        <p class="muted small">Replies go to the sender email. Use <strong>info@centrisec.com</strong> to route normal replies to the shared inbox. The sender must be a Zoho-approved mailbox or alias.</p>
+        <div class="footer-preview-wrap"><p class="muted small" style="margin:0 0 7px">HTML footer preview</p><iframe id="outreach-footer-preview" title="HTML footer preview" sandbox="" style="width:100%;min-height:130px;border:1px solid var(--line);border-radius:8px;background:#fff"></iframe></div>
         <div class="row" style="margin-top:12px"><button id="outreach-settings-save" class="primary">Save email wording</button><span id="outreach-settings-feedback" class="feedback" aria-live="polite"></span></div>
       </div>
     </section>
@@ -1054,12 +1056,20 @@ async function loadSettings() {
   $('#outreach-fallback-greeting').value = settings.fallbackGreeting;
   $('#outreach-signoff').value = settings.signoff;
   $('#outreach-sender-name').value = settings.senderName;
+  $('#outreach-sender-email').value = settings.senderEmail;
   $('#outreach-cta').value = settings.cta;
   $('#outreach-footer-html').value = settings.footerHtml || '';
+  updateFooterPreview();
   const presetModes = { 'Can I send the checklist for your review?': 'checklist', 'Can we schedule a 15-minute demo of the product?': 'demo', 'Can I send a proposal for your review?': 'proposal' };
   const ctaMode = $('#outreach-cta-mode');
   ctaMode.value = presetModes[settings.cta] || (settings.cta === 'Would it be useful if I sent it over?' ? 'auto' : 'custom');
   $('#outreach-custom-cta-wrap').classList.toggle('hidden', ctaMode.value !== 'custom');
+}
+
+function updateFooterPreview() {
+  const footer = $('#outreach-footer-html').value.trim();
+  const empty = '<p style="margin:0;color:#667085;font:14px Arial,sans-serif">Your HTML footer preview will appear here.</p>';
+  $('#outreach-footer-preview').srcdoc = '<!doctype html><html><body style="margin:16px">' + (footer || empty) + '</body></html>';
 }
 
 /* ---------- Tabs / init ---------- */
@@ -1166,6 +1176,7 @@ $('#ai-model-save').addEventListener('click', async () => {
 $('#outreach-cta-mode').addEventListener('change', () => {
   $('#outreach-custom-cta-wrap').classList.toggle('hidden', $('#outreach-cta-mode').value !== 'custom');
 });
+$('#outreach-footer-html').addEventListener('input', updateFooterPreview);
 $('#outreach-settings-save').addEventListener('click', async () => {
   const btn = $('#outreach-settings-save');
   const feedback = $('#outreach-settings-feedback');
@@ -1184,6 +1195,7 @@ $('#outreach-settings-save').addEventListener('click', async () => {
       fallbackGreeting: $('#outreach-fallback-greeting').value,
       signoff: $('#outreach-signoff').value,
       senderName: $('#outreach-sender-name').value,
+      senderEmail: $('#outreach-sender-email').value,
       cta,
       footerHtml: $('#outreach-footer-html').value,
     } });
