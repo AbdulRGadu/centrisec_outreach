@@ -2,10 +2,11 @@ import type { Env } from './env';
 import type { ProspectSegment } from './services/leadSegmentation';
 import schemaConvergenceMigration from '../migrations/0007_production_schema_convergence.sql';
 import campaignWorkspaceMigration from '../migrations/0008_campaign_workspace.sql';
+import scheduledQueueMigration from '../migrations/0009_scheduled_send_queue.sql';
 import { formatD1ExecScript } from './util/sql';
 
-const MIGRATION_ID = 8;
-const MIGRATION_NAME = '0008_campaign_workspace.sql';
+const MIGRATION_ID = 9;
+const MIGRATION_NAME = '0009_scheduled_send_queue.sql';
 const REQUIRED_COLUMNS = {
   leads: {
     sub_industry: 'sub_industry TEXT',
@@ -36,7 +37,13 @@ const REQUIRED_COLUMNS = {
     sequence_step: 'sequence_step INTEGER NOT NULL DEFAULT 1',
     settings_snapshot: 'settings_snapshot TEXT',
     quality_snapshot: 'quality_snapshot TEXT',
+    scheduled_at: 'scheduled_at TEXT',
   },
+} as const;
+
+const CAMPAIGN_REQUIRED_COLUMNS = {
+  send_start_time: "send_start_time TEXT NOT NULL DEFAULT '09:00'",
+  send_interval_minutes: 'send_interval_minutes INTEGER NOT NULL DEFAULT 2',
 } as const;
 
 const REPLY_INGEST_SCHEMA = `
@@ -72,6 +79,10 @@ CREATE INDEX IF NOT EXISTS idx_reply_ingest_message ON reply_ingest_logs(message
 const CAMPAIGN_RUNTIME_SCHEMA = formatD1ExecScript(campaignWorkspaceMigration)
   .split('\n')
   .filter((statement) => !/^ALTER TABLE messages ADD COLUMN /i.test(statement))
+  .join('\n');
+const SCHEDULED_QUEUE_RUNTIME_SCHEMA = formatD1ExecScript(scheduledQueueMigration)
+  .split('\n')
+  .filter((statement) => !/^ALTER TABLE /i.test(statement))
   .join('\n');
 
 let readiness: Promise<void> | null = null;
@@ -144,6 +155,10 @@ async function applyRequiredSchema(env: Env): Promise<void> {
   }
   await ensureColumns();
   await env.DB.exec(CAMPAIGN_RUNTIME_SCHEMA);
+  for (const [name, definition] of Object.entries(CAMPAIGN_REQUIRED_COLUMNS)) {
+    await ensureColumn(env.DB, 'campaigns' as keyof typeof REQUIRED_COLUMNS, name, definition);
+  }
+  await env.DB.exec(SCHEDULED_QUEUE_RUNTIME_SCHEMA);
   if (!(await schemaIsReady(env.DB))) throw new Error('Campaign workspace schema remains incomplete');
   await recordMigration(env.DB);
 }

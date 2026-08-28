@@ -37,6 +37,12 @@ function sendWindow(value: unknown, fallback = '09:00-16:00'): string {
   return result;
 }
 
+function sendStartTime(value: unknown, fallback = '09:00'): string {
+  const result = normalizeText(value, 10) || fallback;
+  if (!/^([01]?\d|2[0-3]):[0-5]\d$/.test(result)) throw new HttpError(400, 'sendStartTime must use HH:MM');
+  return result;
+}
+
 function sendDays(value: unknown, fallback = '1,2,3,4,5'): string {
   const result = normalizeText(value, 30) || fallback;
   const values = [...new Set(result.split(',').map((part) => Number(part.trim())).filter((n) => Number.isInteger(n) && n >= 1 && n <= 7))];
@@ -188,7 +194,7 @@ export async function handleCampaignPost(body: Record<string, unknown>, env: Env
     notes: normalizeMultiline(body.notes, 3000) || null, timezone: normalizeText(body.timezone, 80) || 'Africa/Lagos',
     start: normalizeText(body.startDate, 20) || null, end: normalizeText(body.endDate, 20) || null,
     autoSend: bool(body.autoSend, true), followUp: bool(body.followUpEnabled, true), delay: positive(body.followUpDelayBusinessDays, 4, 1, 14),
-    window: sendWindow(body.sendWindow), days: sendDays(body.sendDays), daily: positive(body.dailyCap, 10, 1, 500), domain: positive(body.domainWeeklyCap, 2, 1, 50),
+    window: sendWindow(body.sendWindow), startTime: sendStartTime(body.sendStartTime), interval: positive(body.sendIntervalMinutes, 2, 1, 60), days: sendDays(body.sendDays), daily: positive(body.dailyCap, 10, 1, 500), domain: positive(body.domainWeeklyCap, 2, 1, 50),
     max: body.maximumVolume === undefined || body.maximumVolume === '' ? null : positive(body.maximumVolume, 1, 1, 100000),
     policy: policy(body.qualityPolicy, profile.quality_policy), tone: normalizeText(body.tone, 200) || null,
     offer: normalizeText(body.offer, 220) || null, cta: normalizeText(body.cta, 220) || null, angle: normalizeText(body.sectorAngle, 400) || null,
@@ -196,9 +202,9 @@ export async function handleCampaignPost(body: Record<string, unknown>, env: Env
   };
   if (status === 'active' && (!profile.is_verified || !profile.is_active)) throw new HttpError(409, 'Select a verified, active sender profile before activating this campaign');
   await env.DB.prepare(
-    `INSERT INTO campaigns (id,name,status,objective,owner_label,notes,sender_profile_id,timezone,start_date,end_date,auto_send,follow_up_enabled,follow_up_delay_business_days,send_window,send_days,daily_cap,domain_weekly_cap,maximum_volume,quality_policy,tone,offer,cta,sector_angle,initial_template,follow_up_template)
-     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,?25)`
-  ).bind(id,name,status,values.objective,values.owner,values.notes,profile.id,values.timezone,values.start,values.end,values.autoSend,values.followUp,values.delay,values.window,values.days,values.daily,values.domain,values.max,values.policy,values.tone,values.offer,values.cta,values.angle,values.initial,values.followTemplate).run();
+    `INSERT INTO campaigns (id,name,status,objective,owner_label,notes,sender_profile_id,timezone,start_date,end_date,auto_send,follow_up_enabled,follow_up_delay_business_days,send_window,send_start_time,send_interval_minutes,send_days,daily_cap,domain_weekly_cap,maximum_volume,quality_policy,tone,offer,cta,sector_angle,initial_template,follow_up_template)
+     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,?25,?26,?27)`
+  ).bind(id,name,status,values.objective,values.owner,values.notes,profile.id,values.timezone,values.start,values.end,values.autoSend,values.followUp,values.delay,values.window,values.startTime,values.interval,values.days,values.daily,values.domain,values.max,values.policy,values.tone,values.offer,values.cta,values.angle,values.initial,values.followTemplate).run();
   await env.DB.prepare(`INSERT INTO campaign_send_policies (campaign_id,send_days,send_window,daily_cap,domain_weekly_cap,maximum_volume) VALUES (?1,?2,?3,?4,?5,?6)`).bind(id,values.days,values.window,values.daily,values.domain,values.max).run();
   return jsonResponse({ ok: true, campaign: await getCampaign(env, id) }, 201);
 }
@@ -211,11 +217,12 @@ export async function handleCampaignPatch(id: string, body: Record<string, unkno
   if (status === 'active' && (!profile.is_verified || !profile.is_active)) throw new HttpError(409, 'Select a verified, active sender profile before activating this campaign');
   const autoSend = bool(body.autoSend, current.auto_send === 1); const follow = bool(body.followUpEnabled, current.follow_up_enabled === 1);
   const days = sendDays(body.sendDays, current.send_days); const window = sendWindow(body.sendWindow, current.send_window);
+  const startTime = sendStartTime(body.sendStartTime, current.send_start_time); const interval = positive(body.sendIntervalMinutes, current.send_interval_minutes, 1, 60);
   const daily = positive(body.dailyCap, current.daily_cap, 1, 500); const domain = positive(body.domainWeeklyCap, current.domain_weekly_cap, 1, 50);
   const max = body.maximumVolume === undefined ? current.maximum_volume : body.maximumVolume === '' ? null : positive(body.maximumVolume, 1, 1, 100000);
   await env.DB.prepare(
-    `UPDATE campaigns SET name=?1,status=?2,objective=?3,owner_label=?4,notes=?5,sender_profile_id=?6,timezone=?7,start_date=?8,end_date=?9,auto_send=?10,follow_up_enabled=?11,follow_up_delay_business_days=?12,send_window=?13,send_days=?14,daily_cap=?15,domain_weekly_cap=?16,maximum_volume=?17,quality_policy=?18,tone=?19,offer=?20,cta=?21,sector_angle=?22,initial_template=?23,follow_up_template=?24,updated_at=datetime('now') WHERE id=?25`
-  ).bind(normalizeText(body.name ?? current.name, 140),status,normalizeMultiline(body.objective ?? current.objective,500)||null,normalizeText(body.ownerLabel ?? current.owner_label,100)||null,normalizeMultiline(body.notes ?? current.notes,3000)||null,profile.id,normalizeText(body.timezone ?? current.timezone,80)||'Africa/Lagos',normalizeText(body.startDate ?? current.start_date,20)||null,normalizeText(body.endDate ?? current.end_date,20)||null,autoSend,follow,positive(body.followUpDelayBusinessDays,current.follow_up_delay_business_days,1,14),window,days,daily,domain,max,policy(body.qualityPolicy ?? current.quality_policy),normalizeText(body.tone ?? current.tone,200)||null,normalizeText(body.offer ?? current.offer,220)||null,normalizeText(body.cta ?? current.cta,220)||null,normalizeText(body.sectorAngle ?? current.sector_angle,400)||null,normalizeMultiline(body.initialTemplate ?? current.initial_template,5000)||null,normalizeMultiline(body.followUpTemplate ?? current.follow_up_template,5000)||null,id).run();
+    `UPDATE campaigns SET name=?1,status=?2,objective=?3,owner_label=?4,notes=?5,sender_profile_id=?6,timezone=?7,start_date=?8,end_date=?9,auto_send=?10,follow_up_enabled=?11,follow_up_delay_business_days=?12,send_window=?13,send_start_time=?14,send_interval_minutes=?15,send_days=?16,daily_cap=?17,domain_weekly_cap=?18,maximum_volume=?19,quality_policy=?20,tone=?21,offer=?22,cta=?23,sector_angle=?24,initial_template=?25,follow_up_template=?26,updated_at=datetime('now') WHERE id=?27`
+  ).bind(normalizeText(body.name ?? current.name, 140),status,normalizeMultiline(body.objective ?? current.objective,500)||null,normalizeText(body.ownerLabel ?? current.owner_label,100)||null,normalizeMultiline(body.notes ?? current.notes,3000)||null,profile.id,normalizeText(body.timezone ?? current.timezone,80)||'Africa/Lagos',normalizeText(body.startDate ?? current.start_date,20)||null,normalizeText(body.endDate ?? current.end_date,20)||null,autoSend,follow,positive(body.followUpDelayBusinessDays,current.follow_up_delay_business_days,1,14),window,startTime,interval,days,daily,domain,max,policy(body.qualityPolicy ?? current.quality_policy),normalizeText(body.tone ?? current.tone,200)||null,normalizeText(body.offer ?? current.offer,220)||null,normalizeText(body.cta ?? current.cta,220)||null,normalizeText(body.sectorAngle ?? current.sector_angle,400)||null,normalizeMultiline(body.initialTemplate ?? current.initial_template,5000)||null,normalizeMultiline(body.followUpTemplate ?? current.follow_up_template,5000)||null,id).run();
   await env.DB.prepare(`INSERT INTO campaign_send_policies (campaign_id,send_days,send_window,daily_cap,domain_weekly_cap,maximum_volume,updated_at) VALUES (?1,?2,?3,?4,?5,?6,datetime('now')) ON CONFLICT(campaign_id) DO UPDATE SET send_days=excluded.send_days,send_window=excluded.send_window,daily_cap=excluded.daily_cap,domain_weekly_cap=excluded.domain_weekly_cap,maximum_volume=excluded.maximum_volume,updated_at=excluded.updated_at`).bind(id,days,window,daily,domain,max).run();
   return jsonResponse({ ok: true, campaign: await getCampaign(env,id) });
 }
@@ -226,7 +233,7 @@ export async function handleCampaignClone(id: string, env: Env): Promise<Respons
     name: `${campaign.name} copy`, status: 'draft', senderProfileId: campaign.sender_profile_id,
     objective: campaign.objective, ownerLabel: campaign.owner_label, notes: campaign.notes, timezone: campaign.timezone,
     autoSend: campaign.auto_send === 1, followUpEnabled: campaign.follow_up_enabled === 1,
-    followUpDelayBusinessDays: campaign.follow_up_delay_business_days, sendWindow: campaign.send_window, sendDays: campaign.send_days,
+    followUpDelayBusinessDays: campaign.follow_up_delay_business_days, sendWindow: campaign.send_window, sendStartTime: campaign.send_start_time, sendIntervalMinutes: campaign.send_interval_minutes, sendDays: campaign.send_days,
     dailyCap: campaign.daily_cap, domainWeeklyCap: campaign.domain_weekly_cap, maximumVolume: campaign.maximum_volume,
     qualityPolicy: campaign.quality_policy, tone: campaign.tone, offer: campaign.offer, cta: campaign.cta, sectorAngle: campaign.sector_angle,
     initialTemplate: campaign.initial_template, followUpTemplate: campaign.follow_up_template,

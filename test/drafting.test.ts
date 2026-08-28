@@ -294,15 +294,16 @@ test('runtime schema convergence covers imported lead and reply fields', () => {
   assert.doesNotMatch(executable, /CREATE TABLE leads_v7 \(\n/);
 });
 
-test('draft page supports filtered selection and bulk approval sending', () => {
+test('draft page supports filtered selection and paced bulk queueing', () => {
   const dashboard = readFileSync(new URL('../public/admin.html', import.meta.url), 'utf8');
   assert.match(dashboard, /draft-filter-company/);
   assert.match(dashboard, /draft-filter-industry/);
   assert.match(dashboard, /draft-filter-segment/);
   assert.match(dashboard, /draft-send-amount/);
-  assert.match(dashboard, /Approve &amp; send selected/);
+  assert.match(dashboard, /Approve &amp; queue selected/);
   assert.match(dashboard, /sendSelectedDrafts/);
-  assert.match(dashboard, /\/messages\/\' \+ id \+ \'\/send-now/);
+  assert.match(dashboard, /intervalMinutes: 2/);
+  assert.match(dashboard, /draft-queue-start/);
   assert.match(dashboard, /drafts-regenerate-all/);
   assert.match(dashboard, /draft-date-from/);
   assert.match(dashboard, /draft-view/);

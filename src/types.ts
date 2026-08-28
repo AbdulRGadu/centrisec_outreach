@@ -72,6 +72,8 @@ export interface CampaignRow {
   follow_up_enabled: number;
   follow_up_delay_business_days: number;
   send_window: string;
+  send_start_time: string;
+  send_interval_minutes: number;
   send_days: string;
   daily_cap: number;
   domain_weekly_cap: number;
@@ -226,6 +228,7 @@ export interface MessageRow {
   sequence_step: number;
   settings_snapshot: string | null;
   quality_snapshot: string | null;
+  scheduled_at: string | null;
 }
 
 export type ReplyMatchStatus =

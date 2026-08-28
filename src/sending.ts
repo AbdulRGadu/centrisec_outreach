@@ -106,6 +106,7 @@ interface DeliverySnapshot {
   ccEmail?: string | null;
   bccEmail?: string | null;
   footerHtml?: string;
+  batchDailyCap?: number;
 }
 
 function deliverySnapshot(message: MessageRow): DeliverySnapshot {
@@ -114,6 +115,14 @@ function deliverySnapshot(message: MessageRow): DeliverySnapshot {
     const parsed = JSON.parse(message.settings_snapshot) as unknown;
     return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as DeliverySnapshot : {};
   } catch { return {}; }
+}
+
+function secondsUntilScheduled(scheduledAt: string | null): number | null {
+  if (!scheduledAt) return null;
+  const date = new Date(scheduledAt.endsWith('Z') ? scheduledAt : `${scheduledAt.replace(' ', 'T')}Z`);
+  if (Number.isNaN(date.getTime())) return null;
+  const seconds = Math.ceil((date.getTime() - Date.now()) / 1000);
+  return seconds > 0 ? clampDelay(seconds) : null;
 }
 
 /** Undo a 'sending' claim so the message can be retried later. */
@@ -139,6 +148,8 @@ export async function processSend(env: Env, messageId: string): Promise<SendOutc
   if (!message || message.direction !== 'outbound') return { action: 'ack', reason: 'message not found' };
   // Idempotency: duplicate queue delivery of an already-handled message is a no-op.
   if (message.status !== 'queued') return { action: 'ack', reason: `status is '${message.status}'` };
+  const scheduleDelay = secondsUntilScheduled(message.scheduled_at);
+  if (scheduleDelay !== null) return { action: 'retry', delaySeconds: scheduleDelay, reason: 'scheduled for later' };
 
   if (!message.lead_id) {
     await markFailed(env, messageId, 'no lead attached');
@@ -153,6 +164,7 @@ export async function processSend(env: Env, messageId: string): Promise<SendOutc
     return { action: 'ack', reason: 'lead not found' };
   }
   const testDelivery = deliveryTestEnabled(lead);
+  const snapshot = deliverySnapshot(message);
   let campaign = null;
   if (message.campaign_id) {
     campaign = await getCampaign(env, message.campaign_id);
@@ -225,7 +237,8 @@ export async function processSend(env: Env, messageId: string): Promise<SendOutc
 
   // Gate 4: daily cap, taken atomically.
   const day = dayString(sendEnv.TIMEZONE);
-  const cap = intVar(env.DAILY_SEND_CAP, 10);
+  // A campaign's selected daily plan is an explicit override of the organisation default.
+  const cap = campaign ? campaign.daily_cap : snapshot.batchDailyCap || intVar(env.DAILY_SEND_CAP, 10);
   if (!(await takeDailySlot(env, day, cap))) {
     const delay = clampDelay(secondsToNextWindowOpen(sendEnv));
     await recordEvent(env.DB, lead.id, 'send_deferred', { message_id: messageId, reason: 'daily_cap', delay });
@@ -270,7 +283,6 @@ export async function processSend(env: Env, messageId: string): Promise<SendOutc
     return { action: 'ack', reason: 'claimed elsewhere' };
   }
 
-  const snapshot = deliverySnapshot(message);
   const finalBody = ensureFooter(message.body ?? '', snapshot.footerHtml ?? (await getOutreachSettings(env.DB)).footerHtml);
   const subject = message.subject ?? 'Centrisec';
 

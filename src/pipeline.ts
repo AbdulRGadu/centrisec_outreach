@@ -17,6 +17,7 @@ import { compatibleLeadSegment } from './schema';
 import { isSuppressed } from './suppression';
 import type { LeadRow, MessageRow } from './types';
 import { wordCount } from './util/text';
+import { nextCampaignStart } from './util/time';
 
 function nextStepWithQuality(
   nextStepPlan: ReturnType<typeof planInitialNextStep>,
@@ -227,11 +228,20 @@ export async function draftLead(env: Env, lead: LeadRow, opts?: { force?: boolea
   });
   if (campaignContext?.campaign.status === 'active' && campaignContext.campaign.auto_send === 1 && quality.valid) {
     try {
-      await env.DB.prepare(`UPDATE messages SET status = 'queued', updated_at = datetime('now') WHERE id = ?1 AND status = 'draft'`).bind(id).run();
-      await env.SEND_QUEUE.send({ type: 'send', messageId: id });
+      const ahead = await env.DB.prepare(
+        `SELECT COUNT(*) AS n FROM messages WHERE campaign_id=?1 AND direction='outbound' AND status='queued'
+         AND (scheduled_at IS NULL OR scheduled_at >= datetime('now'))`
+      ).bind(campaignContext.campaign.id).first<{ n: number }>();
+      const scheduledAt = new Date(
+        nextCampaignStart(campaignContext.campaign.timezone, campaignContext.campaign.send_start_time).getTime()
+        + (ahead?.n ?? 0) * campaignContext.campaign.send_interval_minutes * 60_000
+      ).toISOString();
+      await env.DB.prepare(`UPDATE messages SET status = 'queued', scheduled_at = ?1, updated_at = datetime('now') WHERE id = ?2 AND status = 'draft'`).bind(scheduledAt, id).run();
+      const delaySeconds = Math.min(Math.max(0, Math.ceil((new Date(scheduledAt).getTime() - Date.now()) / 1000)), 85_800);
+      await env.SEND_QUEUE.send({ type: 'send', messageId: id }, delaySeconds > 0 ? { delaySeconds } : undefined);
       await env.DB.prepare(`UPDATE campaign_leads SET status = 'queued', updated_at = datetime('now') WHERE campaign_id = ?1 AND lead_id = ?2`).bind(campaignContext.campaign.id, lead.id).run();
       await env.DB.prepare(`UPDATE leads SET status = 'queued', sales_stage = 'approved_to_send', next_action = 'campaign_auto_send', updated_at = datetime('now') WHERE id = ?1`).bind(lead.id).run();
-      await recordSequenceEvent(env, campaignContext.campaign.id, lead.id, id, 'auto_queued');
+      await recordSequenceEvent(env, campaignContext.campaign.id, lead.id, id, 'auto_queued', { scheduled_at: scheduledAt });
     } catch {
       await env.DB.prepare(`UPDATE messages SET status = 'approved', updated_at = datetime('now') WHERE id = ?1 AND status = 'draft'`).bind(id).run();
       await recordSequenceEvent(env, campaignContext.campaign.id, lead.id, id, 'queue_pending');

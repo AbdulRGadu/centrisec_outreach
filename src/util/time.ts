@@ -134,3 +134,14 @@ export function businessDaysElapsed(sentAt: string, tz: string, now = new Date()
   }
   return days;
 }
+
+/** Next occurrence of a campaign's local start time, expressed as UTC. */
+export function nextCampaignStart(tz: string, time: string, now = new Date()): Date {
+  const match = /^(\d{1,2}):(\d{2})$/.exec(time);
+  if (!match) return now;
+  const p = partsIn(tz, now);
+  const localAsUtc = Date.UTC(Number(p.year), Number(p.month) - 1, Number(p.day), Number(match[1]), Number(match[2]));
+  const candidate = new Date(localAsUtc - tzOffsetMinutes(tz, now) * 60_000);
+  // A start time that has passed means begin immediately, not tomorrow.
+  return candidate > now ? candidate : now;
+}

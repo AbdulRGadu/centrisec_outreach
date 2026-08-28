@@ -215,6 +215,61 @@ export async function handleMessageApprove(id: string, env: Env): Promise<Respon
   return jsonResponse({ ok: true, queued });
 }
 
+function batchScheduleStart(value: unknown): Date {
+  if (typeof value !== 'string' || !value.trim()) return new Date();
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) throw new HttpError(400, 'scheduledAt must be a valid date and time');
+  if (parsed.getTime() < Date.now() - 60_000) throw new HttpError(400, 'scheduledAt cannot be in the past');
+  if (parsed.getTime() > Date.now() + 31 * 86_400_000) throw new HttpError(400, 'scheduledAt must be within 31 days');
+  return parsed;
+}
+
+/** Approve a visible batch and space the queue so messages do not burst together. */
+export async function handleMessagesQueue(body: Record<string, unknown>, env: Env): Promise<Response> {
+  const ids = Array.isArray(body.messageIds)
+    ? [...new Set(body.messageIds.filter((id): id is string => typeof id === 'string' && id.length <= 80))].slice(0, 200)
+    : [];
+  if (!ids.length) throw new HttpError(400, 'Select at least one draft');
+  const interval = Number(body.intervalMinutes ?? 2);
+  if (!Number.isInteger(interval) || interval < 1 || interval > 60) throw new HttpError(400, 'intervalMinutes must be between 1 and 60');
+  const dailyCap = Number(body.dailyCap ?? ids.length);
+  if (!Number.isInteger(dailyCap) || dailyCap < 1 || dailyCap > 500) throw new HttpError(400, 'dailyCap must be between 1 and 500');
+  const start = batchScheduleStart(body.scheduledAt);
+  const queued: Array<{ id: string; scheduledAt: string }> = [];
+  const blocked: Array<{ id: string; reason: string }> = [];
+
+  for (const [index, id] of ids.entries()) {
+    try {
+      const message = await getMessage(env, id);
+      if (!['draft', 'approved'].includes(message.status)) throw new HttpError(409, `Message is ${message.status}`);
+      if (message.draft_quality_status !== 'passed') throw new HttpError(409, 'Draft needs review before it can enter the queue');
+      const lead = await assertEligibleToSend(env, message);
+      const scheduled = new Date(start.getTime() + index * interval * 60_000).toISOString();
+      let snapshot: Record<string, unknown> = {};
+      try {
+        const parsed = message.settings_snapshot ? JSON.parse(message.settings_snapshot) as unknown : null;
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) snapshot = parsed as Record<string, unknown>;
+      } catch { /* Preserve delivery behavior with a fresh safe snapshot. */ }
+      snapshot.batchDailyCap = dailyCap;
+      const updated = await env.DB.prepare(
+        `UPDATE messages SET status='queued', scheduled_at=?1, settings_snapshot=?2, updated_at=datetime('now')
+         WHERE id=?3 AND status IN ('draft','approved')`
+      ).bind(scheduled, JSON.stringify(snapshot), id).run();
+      if ((updated.meta.changes ?? 0) === 0) throw new HttpError(409, 'Message changed while being queued');
+      await env.DB.prepare(
+        `UPDATE leads SET status='queued', sales_stage='approved_to_send', next_action='scheduled_send', updated_at=datetime('now') WHERE id=?1`
+      ).bind(lead.id).run();
+      await recordEvent(env.DB, lead.id, 'enqueued', { message_id: id, scheduled_at: scheduled, interval_minutes: interval });
+      const delaySeconds = Math.min(Math.max(0, Math.ceil((new Date(scheduled).getTime() - Date.now()) / 1000)), 85_800);
+      await env.SEND_QUEUE.send({ type: 'send', messageId: id }, delaySeconds > 0 ? { delaySeconds } : undefined);
+      queued.push({ id, scheduledAt: scheduled });
+    } catch (error) {
+      blocked.push({ id, reason: error instanceof Error ? error.message : String(error) });
+    }
+  }
+  return jsonResponse({ ok: true, queued, blocked, intervalMinutes: interval, dailyCap });
+}
+
 export async function handleMessageReject(id: string, body: Record<string, unknown>, env: Env): Promise<Response> {
   const message = await getMessage(env, id);
   if (!['draft', 'needs_review'].includes(message.status)) {

@@ -11,6 +11,7 @@ test('four business days skips a weekend', () => {
 
 test('campaign workspace persists snapshots and owns one follow-up sequence', () => {
   const migration = readFileSync(new URL('../migrations/0008_campaign_workspace.sql', import.meta.url), 'utf8');
+  const scheduleMigration = readFileSync(new URL('../migrations/0009_scheduled_send_queue.sql', import.meta.url), 'utf8');
   const schedule = readFileSync(new URL('../src/schedule.ts', import.meta.url), 'utf8');
   const sending = readFileSync(new URL('../src/sending.ts', import.meta.url), 'utf8');
   assert.match(migration, /CREATE TABLE IF NOT EXISTS sender_profiles/);
@@ -22,12 +23,15 @@ test('campaign workspace persists snapshots and owns one follow-up sequence', ()
   assert.match(schedule, /businessDaysElapsed/);
   assert.match(sending, /campaign_daily_cap/);
   assert.match(sending, /sequence_step != \?4/);
+  assert.match(scheduleMigration, /scheduled_at TEXT/);
 });
 
 test('campaign dashboard exposes safe operator controls', () => {
   const page = readFileSync(new URL('../public/admin.html', import.meta.url), 'utf8');
   assert.match(page, /data-tab="campaigns"/);
   assert.match(page, /data-tab="sent"/);
+  assert.match(page, /data-tab="queue"/);
+  assert.match(page, /Approve &amp; queue selected/);
   assert.match(page, /status=sent/);
   assert.match(page, /Auto-send sendable drafts/);
   assert.match(page, /Stop unsent/);

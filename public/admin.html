@@ -150,6 +150,7 @@
       <button data-tab="pipeline" class="active">Overview</button>
       <button data-tab="campaigns">Campaigns</button>
       <button data-tab="drafts">Drafts</button>
+      <button data-tab="queue">Queue</button>
       <button data-tab="sent">Sent</button>
       <button data-tab="replies">Replies</button>
       <button data-tab="suppression">Suppression</button>
@@ -206,11 +207,13 @@
             <option value="saas">saas</option><option value="ecommerce">ecommerce</option>
             <option value="professional_services">professional services</option><option value="general_business">general business</option>
           </select>
+          <label class="muted small">Queue plan <select id="draft-queue-plan"><option value="10">Starter · 10 daily</option><option value="20">Growth · 20 daily</option><option value="custom">Custom</option></select></label>
           <label class="muted small">Amount <input id="draft-send-amount" type="number" min="1" max="200" value="10" style="width:70px"></label>
+          <label class="muted small">Start <input id="draft-queue-start" type="datetime-local"></label>
           <button id="drafts-select-visible">Select visible</button>
           <button id="drafts-clear-selection">Clear</button>
           <button id="drafts-regenerate-all">Regenerate visible</button>
-          <button id="drafts-send-selected" class="primary">Approve &amp; send selected</button>
+          <button id="drafts-send-selected" class="primary">Approve &amp; queue selected</button>
         </div>
         <p id="drafts-selection-status" class="muted small" style="margin:6px 0 0">0 selected</p>
       </div>
@@ -334,6 +337,14 @@
       </div>
     </section>
 
+    <section id="tab-queue" class="hidden">
+      <div class="toolbar">
+        <div class="grow"><b>Send queue</b><div class="muted small">Messages are paced one every two minutes from the selected start time. A campaign’s caps and sending window still apply.</div></div>
+        <button id="queue-refresh">Refresh</button>
+      </div>
+      <div id="queue-list"></div>
+    </section>
+
     <section id="tab-sent" class="hidden">
       <div class="toolbar">
         <div class="grow"><b>Sent mail</b><div class="muted small">A message appears here only after Zoho accepts delivery. Queued messages remain out of this list.</div></div>
@@ -363,6 +374,9 @@
           <label>Send days<input id="campaign-days" value="1,2,3,4,5" style="width:100%"></label>
           <label>Send window<input id="campaign-window" value="09:00-16:00" style="width:100%"></label>
           <label>Daily cap<input id="campaign-daily-cap" type="number" min="1" value="10" style="width:100%"></label>
+          <label>Send plan<select id="campaign-send-plan" style="width:100%"><option value="10">Starter · 10 daily</option><option value="20">Growth · 20 daily</option><option value="custom">Custom daily cap</option></select></label>
+          <label>Start time<input id="campaign-start-time" type="time" value="09:00" style="width:100%"></label>
+          <label>Interval<input id="campaign-interval" type="number" min="1" max="60" value="2" style="width:100%"><span class="muted small">minutes between emails</span></label>
           <label>Per-domain weekly cap<input id="campaign-domain-cap" type="number" min="1" value="2" style="width:100%"></label>
           <label>Maximum volume<input id="campaign-max-volume" type="number" min="1" placeholder="Optional" style="width:100%"></label>
           <label>Quality policy<select id="campaign-quality" style="width:100%"><option value="balanced">Balanced</option><option value="strict">Strict</option><option value="custom">Custom</option></select></label>
@@ -410,6 +424,7 @@ const state = {
   drafting: new Set(),
   draftMessages: [],
   draftSelection: new Set(),
+  draftAutoSelected: false,
   campaignEditing: null,
   profileEditing: null,
   leadSelection: new Set(),
@@ -769,6 +784,12 @@ async function loadDrafts() {
   }).sort((a, b) => ($('#draft-date-sort').value === 'asc' ? 1 : -1) * String(a.created_at || a.updated_at || '').localeCompare(String(b.created_at || b.updated_at || '')));
   const list = $('#drafts-list');
   state.draftSelection = new Set([...state.draftSelection].filter((id) => messages.some((m) => m.id === id)));
+  if (!state.draftAutoSelected && $('#draft-view').value === 'review') {
+    for (const message of messages) {
+      if (message.status === 'draft' && message.draft_quality_status === 'passed') state.draftSelection.add(message.id);
+    }
+    state.draftAutoSelected = true;
+  }
   updateDraftSelectionStatus();
   if (messages.length === 0) {
     list.replaceChildren(el('p', { class: 'empty' }, 'No drafts match these filters.'));
@@ -798,6 +819,11 @@ async function loadDrafts() {
   }));
 }
 
+function localDateTimeInputValue(date) {
+  const pad = (value) => String(value).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
 /* ---------- Sent tab ---------- */
 
 async function loadSent() {
@@ -824,6 +850,21 @@ async function loadSent() {
   )));
 }
 
+async function loadQueue() {
+  const data = await api('/messages?status=queued&limit=200');
+  const list = $('#queue-list');
+  const messages = data.messages || [];
+  if (!messages.length) {
+    list.replaceChildren(el('p', { class: 'empty' }, 'The send queue is empty.')); return;
+  }
+  list.replaceChildren(...messages.sort((a, b) => String(a.scheduled_at || a.updated_at).localeCompare(String(b.scheduled_at || b.updated_at))).map((message) => el('div', { class: 'card' },
+    el('div', { class: 'row' }, el('b', { class: 'grow' }, message.lead_company || message.lead_email || message.to_email || 'Unknown recipient'), chip('queued', 'st-'), el('span', { class: 'muted small' }, message.scheduled_at ? 'Scheduled ' + fmtDate(message.scheduled_at) : 'Awaiting next send window')),
+    el('div', { class: 'muted small' }, 'To: ' + (message.to_email || '') + (message.campaign_id ? ' · campaign controlled' : ' · direct queue')),
+    el('div', { style: 'margin-top:5px' }, el('b', {}, message.subject || '(no subject)')),
+    message.error ? el('p', { class: 'warning small' }, message.error) : null
+  )));
+}
+
 function updateDraftSelectionStatus() {
   const status = $('#drafts-selection-status');
   if (status) status.textContent = state.draftSelection.size + ' selected';
@@ -844,20 +885,16 @@ async function sendSelectedDrafts() {
   const amount = Math.min(Math.max(Number.parseInt($('#draft-send-amount').value, 10) || 1, 1), 200);
   const selected = [...state.draftSelection].slice(0, amount);
   if (!selected.length) { toast('Select at least one draft first', true); return; }
-  if (!confirm('Approve and send ' + selected.length + ' selected draft' + (selected.length === 1 ? '' : 's') + '?')) return;
+  if (!confirm('Approve and queue ' + selected.length + ' selected draft' + (selected.length === 1 ? '' : 's') + ' one every 2 minutes?')) return;
   const button = $('#drafts-send-selected');
   button.disabled = true;
-  let sent = 0; let blocked = 0; let repaired = 0;
+  let queued = 0; let blocked = 0;
   try {
-    for (const id of selected) {
-      try {
-        const result = await api('/messages/' + id + '/send-now', { method: 'POST' });
-        if (result.sent) { sent++; state.draftSelection.delete(id); }
-        else if (result.repaired) repaired++;
-        else blocked++;
-      } catch { blocked++; }
-    }
-    toast(sent + ' sent' + (blocked ? ', ' + blocked + ' blocked' : '') + (repaired ? ', ' + repaired + ' repaired for review' : ''));
+    const localStart = $('#draft-queue-start').value;
+    const result = await api('/messages', { method: 'POST', body: { messageIds: selected, scheduledAt: localStart ? new Date(localStart).toISOString() : new Date().toISOString(), intervalMinutes: 2, dailyCap: amount } });
+    queued = result.queued.length; blocked = result.blocked.length;
+    for (const row of result.queued) state.draftSelection.delete(row.id);
+    toast(queued + ' queued one every 2 minutes' + (blocked ? ', ' + blocked + ' need review or are blocked' : ''));
     await Promise.all([loadDrafts(), refreshStats()]);
   } finally {
     button.disabled = false;
@@ -871,7 +908,16 @@ async function regenerateVisibleDrafts() {
   if (!targets.length) { toast('No drafts match the current filters', true); return; }
   if (!confirm('Regenerate ' + targets.length + ' visible drafts?')) return;
   const button = $('#drafts-regenerate-all'); button.disabled = true;
-  try { for (const message of targets) await api('/leads/' + message.lead_id + '/draft', { method: 'POST', body: { force: true } }); toast(targets.length + ' regenerated'); await loadDrafts(); }
+  try {
+    const generated = [];
+    for (const message of targets) {
+      const result = await api('/leads/' + message.lead_id + '/draft', { method: 'POST', body: { force: true } });
+      generated.push(result.message);
+    }
+    state.draftSelection = new Set(generated.filter((message) => message.status === 'draft' && message.draft_quality_status === 'passed').map((message) => message.id));
+    state.draftAutoSelected = true;
+    toast(targets.length + ' regenerated and sendable drafts selected'); await loadDrafts();
+  }
   finally { button.disabled = false; }
 }
 
@@ -1223,7 +1269,7 @@ function campaignPayload() {
     notes: $('#campaign-notes').value.trim(), timezone: $('#campaign-timezone').value.trim(), status: $('#campaign-status').value,
     startDate: $('#campaign-start').value, endDate: $('#campaign-end').value,
     sendDays: $('#campaign-days').value.trim(), sendWindow: $('#campaign-window').value.trim(),
-    dailyCap: Number($('#campaign-daily-cap').value), domainWeeklyCap: Number($('#campaign-domain-cap').value),
+    dailyCap: Number($('#campaign-daily-cap').value), sendStartTime: $('#campaign-start-time').value, sendIntervalMinutes: Number($('#campaign-interval').value), domainWeeklyCap: Number($('#campaign-domain-cap').value),
     maximumVolume: $('#campaign-max-volume').value.trim(), qualityPolicy: $('#campaign-quality').value,
     offer: $('#campaign-offer').value.trim(), cta: $('#campaign-cta').value.trim(), sectorAngle: $('#campaign-angle').value.trim(), tone: $('#campaign-tone').value.trim(),
     autoSend: $('#campaign-auto-send').checked, followUpEnabled: $('#campaign-follow-up').checked,
@@ -1242,6 +1288,8 @@ function fillCampaignForm(campaign = null) {
   $('#campaign-status').value = campaign?.status || 'draft'; $('#campaign-days').value = campaign?.send_days || '1,2,3,4,5';
   $('#campaign-start').value = campaign?.start_date || ''; $('#campaign-end').value = campaign?.end_date || '';
   $('#campaign-window').value = campaign?.send_window || '09:00-16:00'; $('#campaign-daily-cap').value = campaign?.daily_cap || 10;
+  $('#campaign-send-plan').value = String(campaign?.daily_cap || 10) === '20' ? '20' : String(campaign?.daily_cap || 10) === '10' ? '10' : 'custom';
+  $('#campaign-start-time').value = campaign?.send_start_time || '09:00'; $('#campaign-interval').value = campaign?.send_interval_minutes || 2;
   $('#campaign-domain-cap').value = campaign?.domain_weekly_cap || 2; $('#campaign-max-volume').value = campaign?.maximum_volume || '';
   $('#campaign-quality').value = campaign?.quality_policy || 'balanced'; $('#campaign-offer').value = campaign?.offer || '';
   $('#campaign-cta').value = campaign?.cta || ''; $('#campaign-angle').value = campaign?.sector_angle || ''; $('#campaign-tone').value = campaign?.tone || '';
@@ -1318,6 +1366,7 @@ const loaders = {
   pipeline: loadLeads,
   campaigns: loadCampaigns,
   drafts: loadDrafts,
+  queue: loadQueue,
   sent: loadSent,
   replies: loadReplies,
   suppression: loadSuppression,
@@ -1346,6 +1395,7 @@ async function boot() {
 fillSelect($('#f-status'), LEAD_STATUSES);
 fillSelect($('#f-segment'), SEGMENTS);
 fillSelect($('#r-class'), CLASSIFICATIONS);
+$('#draft-queue-start').value = localDateTimeInputValue(new Date(Date.now() + 2 * 60_000));
 
 $('#tabs').addEventListener('click', (e) => {
   const tab = e.target && e.target.dataset && e.target.dataset.tab;
@@ -1366,6 +1416,15 @@ $('#page-next').addEventListener('click', () => {
   if ((state.page + 1) * state.pageSize < state.total) { state.page++; loadLeads(); }
 });
 $('#drafts-refresh').addEventListener('click', () => loadDrafts().catch((e) => toast(e.message, true)));
+$('#queue-refresh').addEventListener('click', () => loadQueue().catch((e) => toast(e.message, true)));
+$('#draft-queue-plan').addEventListener('change', () => {
+  const plan = $('#draft-queue-plan').value;
+  if (plan !== 'custom') $('#draft-send-amount').value = plan;
+});
+$('#campaign-send-plan').addEventListener('change', () => {
+  const plan = $('#campaign-send-plan').value;
+  if (plan !== 'custom') $('#campaign-daily-cap').value = plan;
+});
 $('#sent-refresh').addEventListener('click', () => loadSent().catch((e) => toast(e.message, true)));
 $('#sent-filter-company').addEventListener('input', () => loadSent().catch((e) => toast(e.message, true)));
 $('#drafts-regenerate-all').addEventListener('click', () => regenerateVisibleDrafts().catch((e) => toast(e.message, true)));
