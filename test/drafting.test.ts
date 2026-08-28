@@ -317,6 +317,16 @@ test('custom email wording flows into the rendered draft and CTA strategy', () =
   assert.match(draft.body, /^Goodday Mr. Ada,/);
   assert.match(draft.body, /Can I send a proposal for your review\?/);
   assert.match(draft.body, /Best regards,\nGadu Abdul$/);
+  assert.equal(validateDraftQuality(draft.subject, draft.body, prospect, plan.strategy, draft.body, settings).valid, true);
+});
+
+test('approving a green draft respects saved wording and does not re-block it after settings change', () => {
+  const messages = readFileSync(new URL('../src/messages.ts', import.meta.url), 'utf8');
+  assert.match(messages, /getOutreachSettings\(env\.DB\)/);
+  assert.match(messages, /renderDraftEmail\(normalizeMultiline\(body\.body, 5000\), lead, settings/);
+  assert.match(messages, /buildPersonalizationPlan\(lead, settings\)\.strategy/);
+  assert.match(messages, /if \(message\.draft_quality_status === 'passed'\) return false/);
+  assert.match(messages, /if \(requiresAutomatedRepair\(message, quality\)\)/);
 });
 
 test('outbound outreach copies the configured Centrisec inbox without changing the prospect recipient', () => {

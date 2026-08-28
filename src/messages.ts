@@ -8,6 +8,7 @@ import { deliveryTestEnabled, priorOutboundBlocksDelivery } from './services/del
 import { validateDraftQuality } from './services/draftQuality';
 import { normalizeDraftSubject, renderDraftEmail } from './services/emailRenderer';
 import { buildPersonalizationPlan } from './services/personalization';
+import { getOutreachSettings } from './services/outreachSettings';
 import { isSuppressed } from './suppression';
 import type { LeadRow, MessageRow } from './types';
 
@@ -56,8 +57,9 @@ export async function handleMessagePatch(id: string, body: Record<string, unknow
   }
   const subject = typeof body.subject === 'string' ? normalizeDraftSubject(normalizeText(body.subject, 150)) : null;
   const lead = message.lead_id ? await getLead(env, message.lead_id) : null;
+  const settings = lead ? await getOutreachSettings(env.DB) : null;
   const newBody = typeof body.body === 'string' && lead
-    ? renderDraftEmail(normalizeMultiline(body.body, 5000), lead)
+    ? renderDraftEmail(normalizeMultiline(body.body, 5000), lead, settings ?? undefined)
     : typeof body.body === 'string' ? normalizeMultiline(body.body, 5000) : null;
   if (subject === null && newBody === null) throw new HttpError(400, 'Provide subject and/or body');
   if (subject !== null && subject.length < 3) throw new HttpError(400, 'Subject is too short');
@@ -65,14 +67,15 @@ export async function handleMessagePatch(id: string, body: Record<string, unknow
 
   const finalSubject = subject ?? message.subject ?? '';
   const finalBody = newBody ?? message.body ?? '';
-  const strategy = lead ? buildPersonalizationPlan(lead).strategy : null;
+  const strategy = lead ? buildPersonalizationPlan(lead, settings ?? undefined).strategy : null;
   const quality = lead
     ? validateDraftQuality(
         finalSubject,
         finalBody,
         lead,
         strategy ?? undefined,
-        typeof body.body === 'string' ? normalizeMultiline(body.body, 5000) : finalBody
+        typeof body.body === 'string' ? normalizeMultiline(body.body, 5000) : finalBody,
+        settings ?? undefined
       )
     : { valid: false, status: 'needs_review' as const, warnings: ['Draft has no lead.'], word_count: 0, question_count: 0, checks: [] };
   const nextStatus = quality.valid ? 'draft' : 'needs_review';
@@ -135,13 +138,25 @@ async function assertEligibleToSend(env: Env, message: MessageRow): Promise<Lead
   return lead;
 }
 
-function currentQuality(message: MessageRow, lead: LeadRow) {
+async function currentQuality(env: Env, message: MessageRow, lead: LeadRow) {
+  const settings = await getOutreachSettings(env.DB);
   return validateDraftQuality(
     message.subject ?? '',
     message.body ?? '',
     lead,
-    buildPersonalizationPlan(lead).strategy
+    buildPersonalizationPlan(lead, settings).strategy,
+    message.body ?? '',
+    settings
   );
+}
+
+/**
+ * A green quality result is the approval gate. Draft edits always recalculate
+ * it, so later wording-setting changes cannot strand an already-passed draft.
+ */
+function requiresAutomatedRepair(message: MessageRow, quality: ReturnType<typeof validateDraftQuality>): boolean {
+  if (message.draft_quality_status === 'passed') return false;
+  return message.draft_quality_status === 'needs_review' || !quality.valid;
 }
 
 export async function handleMessageApprove(id: string, env: Env): Promise<Response> {
@@ -150,8 +165,8 @@ export async function handleMessageApprove(id: string, env: Env): Promise<Respon
     throw new HttpError(409, `Cannot approve a message in status '${message.status}'`);
   }
   const lead = await assertEligibleToSend(env, message);
-  const quality = currentQuality(message, lead);
-  if (message.draft_quality_status === 'needs_review' || !quality.valid) {
+  const quality = await currentQuality(env, message, lead);
+  if (requiresAutomatedRepair(message, quality)) {
     const repaired = await autoRepairStoredDraft(env, message, lead);
     if (!repaired.automation.quality.valid) {
       throw new HttpError(
@@ -248,8 +263,8 @@ export async function handleSendNow(id: string, env: Env): Promise<Response> {
     throw new HttpError(409, `Cannot send a message in status '${message.status}'`);
   }
   const lead = await assertEligibleToSend(env, message);
-  const quality = currentQuality(message, lead);
-  if (message.draft_quality_status === 'needs_review' || !quality.valid) {
+  const quality = await currentQuality(env, message, lead);
+  if (requiresAutomatedRepair(message, quality)) {
     if (!['draft', 'needs_review'].includes(message.status)) {
       throw new HttpError(409, `Approved draft no longer passes quality review: ${quality.warnings.join(' ')}`);
     }
