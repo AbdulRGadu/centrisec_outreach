@@ -27,6 +27,8 @@ test('campaign workspace persists snapshots and owns one follow-up sequence', ()
 test('campaign dashboard exposes safe operator controls', () => {
   const page = readFileSync(new URL('../public/admin.html', import.meta.url), 'utf8');
   assert.match(page, /data-tab="campaigns"/);
+  assert.match(page, /data-tab="sent"/);
+  assert.match(page, /status=sent/);
   assert.match(page, /Auto-send sendable drafts/);
   assert.match(page, /Stop unsent/);
   assert.match(page, /Sender profiles/);

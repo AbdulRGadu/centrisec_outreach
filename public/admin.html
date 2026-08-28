@@ -150,6 +150,7 @@
       <button data-tab="pipeline" class="active">Overview</button>
       <button data-tab="campaigns">Campaigns</button>
       <button data-tab="drafts">Drafts</button>
+      <button data-tab="sent">Sent</button>
       <button data-tab="replies">Replies</button>
       <button data-tab="suppression">Suppression</button>
       <button data-tab="add">Add lead</button>
@@ -331,6 +332,15 @@
         </div>
         <div id="profile-list" style="margin-top:12px"></div>
       </div>
+    </section>
+
+    <section id="tab-sent" class="hidden">
+      <div class="toolbar">
+        <div class="grow"><b>Sent mail</b><div class="muted small">A message appears here only after Zoho accepts delivery. Queued messages remain out of this list.</div></div>
+        <input id="sent-filter-company" placeholder="Filter company or email">
+        <button id="sent-refresh">Refresh</button>
+      </div>
+      <div id="sent-list"></div>
     </section>
 
     <section id="tab-campaigns" class="hidden">
@@ -786,6 +796,32 @@ async function loadDrafts() {
         el('button', { class: 'primary', onclick: () => openDraft(m.id) }, view === 'sent' ? 'View sent email' : 'Review and approve'))
     );
   }));
+}
+
+/* ---------- Sent tab ---------- */
+
+async function loadSent() {
+  const data = await api('/messages?status=sent&limit=200');
+  const filter = $('#sent-filter-company').value.trim().toLowerCase();
+  const messages = (data.messages || []).filter((message) => !filter || [
+    message.lead_company, message.lead_email, message.to_email, message.subject,
+  ].filter(Boolean).join(' ').toLowerCase().includes(filter));
+  const list = $('#sent-list');
+  if (!messages.length) {
+    list.replaceChildren(el('p', { class: 'empty' }, filter ? 'No sent emails match this filter.' : 'No emails have been sent yet.'));
+    return;
+  }
+  list.replaceChildren(...messages.map((message) => el('div', { class: 'card' },
+    el('div', { class: 'row' },
+      el('b', { class: 'grow' }, message.lead_company || message.lead_email || message.to_email || 'Unknown recipient'),
+      chip('sent', 'st-'),
+      message.campaign_id ? chip('campaign', 'seg-') : chip('legacy', 'seg-'),
+      el('span', { class: 'muted small' }, 'Sent ' + fmtDate(message.sent_at))),
+    el('div', { class: 'muted small' }, 'To: ' + (message.to_email || '') + (message.lead_role ? ' · ' + message.lead_role : '')),
+    el('div', { style: 'margin-top:6px' }, el('b', {}, message.subject || '(no subject)')),
+    el('details', { style: 'margin-top:6px' }, el('summary', { class: 'muted small' }, 'View email'), el('pre', {}, message.body || '')),
+    message.error ? el('p', { class: 'warning small' }, message.error) : null
+  )));
 }
 
 function updateDraftSelectionStatus() {
@@ -1282,6 +1318,7 @@ const loaders = {
   pipeline: loadLeads,
   campaigns: loadCampaigns,
   drafts: loadDrafts,
+  sent: loadSent,
   replies: loadReplies,
   suppression: loadSuppression,
   add: async () => {},
@@ -1329,6 +1366,8 @@ $('#page-next').addEventListener('click', () => {
   if ((state.page + 1) * state.pageSize < state.total) { state.page++; loadLeads(); }
 });
 $('#drafts-refresh').addEventListener('click', () => loadDrafts().catch((e) => toast(e.message, true)));
+$('#sent-refresh').addEventListener('click', () => loadSent().catch((e) => toast(e.message, true)));
+$('#sent-filter-company').addEventListener('input', () => loadSent().catch((e) => toast(e.message, true)));
 $('#drafts-regenerate-all').addEventListener('click', () => regenerateVisibleDrafts().catch((e) => toast(e.message, true)));
 ['#draft-view', '#draft-date-from', '#draft-date-to', '#draft-date-sort'].forEach((selector) => {
   $(selector).addEventListener('change', () => loadDrafts().catch((e) => toast(e.message, true)));
