@@ -12,6 +12,7 @@ import { segmentLeadRow } from './services/leadSegmentation';
 import { planInitialNextStep } from './services/nextStepPlanner';
 import { buildPersonalizationPlan } from './services/personalization';
 import { effectiveSenderEmail, getOutreachSettings } from './services/outreachSettings';
+import { activeCampaignForLead, recordSequenceEvent, renderCampaignTemplate, senderProfileSettings } from './services/campaigns';
 import { compatibleLeadSegment } from './schema';
 import { isSuppressed } from './suppression';
 import type { LeadRow, MessageRow } from './types';
@@ -87,8 +88,19 @@ export async function draftLead(env: Env, lead: LeadRow, opts?: { force?: boolea
       .first<MessageRow>();
     if (current) return current;
   }
-  const outreachSettings = await getOutreachSettings(env.DB);
+  const campaignContext = await activeCampaignForLead(env, lead.id);
+  const outreachSettings = campaignContext
+    ? senderProfileSettings(campaignContext.profile, campaignContext.campaign)
+    : await getOutreachSettings(env.DB);
   const plan = buildPersonalizationPlan(lead, outreachSettings);
+  if (campaignContext) {
+    plan.strategy = {
+      ...plan.strategy,
+      recommended_offer: campaignContext.campaign.offer || plan.strategy.recommended_offer,
+      recommended_cta: campaignContext.campaign.cta || plan.strategy.recommended_cta,
+      likely_security_context: campaignContext.campaign.sector_angle || plan.strategy.likely_security_context,
+    };
+  }
   const nextStepPlan = planInitialNextStep(plan.strategy);
   const storedSegment = await compatibleLeadSegment(env.DB, plan.strategy.segment);
   await env.DB.prepare(
@@ -97,13 +109,17 @@ export async function draftLead(env: Env, lead: LeadRow, opts?: { force?: boolea
 
   const baseMessages = buildDraftMessages(plan);
   const model = await activeAiModel(env);
-  let initialDraft = { subject: '', body: '' };
-  try {
-    initialDraft = await runJson(env, model, baseMessages, draftJsonSchema, draftResult, {
-      maxTokens: 1200,
-    });
-  } catch {
-    // The bounded repair flow retries the model, then produces a validated safe fallback.
+  let initialDraft = campaignContext?.campaign.initial_template
+    ? { subject: `Security readiness for ${lead.company || lead.first_name || 'your team'}`, body: renderCampaignTemplate(campaignContext.campaign.initial_template, lead) }
+    : { subject: '', body: '' };
+  if (!campaignContext?.campaign.initial_template) {
+    try {
+      initialDraft = await runJson(env, model, baseMessages, draftJsonSchema, draftResult, {
+        maxTokens: 1200,
+      });
+    } catch {
+      // The bounded repair flow retries the model, then produces a validated safe fallback.
+    }
   }
   const automation = await improveDraftUntilSendable({
     lead,
@@ -144,10 +160,11 @@ export async function draftLead(env: Env, lead: LeadRow, opts?: { force?: boolea
          id, lead_id, direction, status, subject, body, from_email, to_email,
          ai_model, prompt_version, error, next_action, buyer_persona, security_context,
          recommended_offer, recommended_cta, draft_quality_status,
-         validation_warnings, next_step_plan
+         validation_warnings, next_step_plan, campaign_id, sender_profile_id, sequence_step,
+         settings_snapshot, quality_snapshot
        ) VALUES (
          ?1, ?2, 'outbound', ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12,
-         ?13, ?14, ?15, ?16, ?17, ?18
+         ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, 1, ?21, ?22
        )`
     )
     .bind(
@@ -156,7 +173,7 @@ export async function draftLead(env: Env, lead: LeadRow, opts?: { force?: boolea
       status,
       normalizedSubject,
       normalizedBody,
-      effectiveSenderEmail(outreachSettings, env),
+      campaignContext?.profile.sender_email ?? effectiveSenderEmail(outreachSettings, env),
       lead.email,
       model,
       PROMPT_VERSION,
@@ -168,7 +185,19 @@ export async function draftLead(env: Env, lead: LeadRow, opts?: { force?: boolea
       plan.strategy.recommended_cta,
       quality.status,
       JSON.stringify(quality.warnings),
-      JSON.stringify(savedNextStepPlan)
+      JSON.stringify(savedNextStepPlan),
+      campaignContext?.campaign.id ?? null,
+      campaignContext?.profile.id ?? null,
+      JSON.stringify({
+        senderEmail: campaignContext?.profile.sender_email ?? effectiveSenderEmail(outreachSettings, env),
+        replyEmail: campaignContext?.profile.reply_email ?? effectiveSenderEmail(outreachSettings, env),
+        ccEmail: campaignContext?.profile.cc_email ?? env.OUTREACH_CC_EMAIL,
+        bccEmail: campaignContext?.profile.bcc_email ?? null,
+        footerHtml: outreachSettings.footerHtml,
+        campaignId: campaignContext?.campaign.id ?? null,
+        qualityPolicy: campaignContext?.campaign.quality_policy ?? 'strict',
+      }),
+      JSON.stringify({ status: quality.status, valid: quality.valid, warnings: quality.warnings, checks: quality.checks })
     )
     .run();
   await env.DB
@@ -192,6 +221,22 @@ export async function draftLead(env: Env, lead: LeadRow, opts?: { force?: boolea
     repair_failures: automation.repair_failures,
     used_fallback: automation.used_fallback,
   });
+  await recordSequenceEvent(env, campaignContext?.campaign.id ?? null, lead.id, id, 'draft_created', {
+    quality: quality.status,
+    policy: campaignContext?.campaign.quality_policy ?? 'strict',
+  });
+  if (campaignContext?.campaign.status === 'active' && campaignContext.campaign.auto_send === 1 && quality.valid) {
+    try {
+      await env.DB.prepare(`UPDATE messages SET status = 'queued', updated_at = datetime('now') WHERE id = ?1 AND status = 'draft'`).bind(id).run();
+      await env.SEND_QUEUE.send({ type: 'send', messageId: id });
+      await env.DB.prepare(`UPDATE campaign_leads SET status = 'queued', updated_at = datetime('now') WHERE campaign_id = ?1 AND lead_id = ?2`).bind(campaignContext.campaign.id, lead.id).run();
+      await env.DB.prepare(`UPDATE leads SET status = 'queued', sales_stage = 'approved_to_send', next_action = 'campaign_auto_send', updated_at = datetime('now') WHERE id = ?1`).bind(lead.id).run();
+      await recordSequenceEvent(env, campaignContext.campaign.id, lead.id, id, 'auto_queued');
+    } catch {
+      await env.DB.prepare(`UPDATE messages SET status = 'approved', updated_at = datetime('now') WHERE id = ?1 AND status = 'draft'`).bind(id).run();
+      await recordSequenceEvent(env, campaignContext.campaign.id, lead.id, id, 'queue_pending');
+    }
+  }
 
   const message = await env.DB.prepare('SELECT * FROM messages WHERE id = ?1').bind(id).first<MessageRow>();
   if (!message) throw new HttpError(500, 'Draft insert failed');

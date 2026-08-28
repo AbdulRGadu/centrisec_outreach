@@ -7,6 +7,7 @@ import { dayString, isInSendWindow, secondsToNextWindowOpen, weekStartString } f
 import { ensureFooter } from './util/text';
 import { getAccessToken, sendMail, ZohoError } from './zoho';
 import { effectiveSenderEmail, getOutreachSettings } from './services/outreachSettings.ts';
+import { getCampaign, recordSequenceEvent } from './services/campaigns.ts';
 
 export type SendOutcome =
   | { action: 'sent'; dryRun: boolean }
@@ -71,11 +72,48 @@ async function takeDomainSlot(env: Env, weekStart: string, domain: string, cap: 
   return (res.meta.changes ?? 0) > 0;
 }
 
+async function decrementCampaignDailyCounter(env: Env, campaignId: string, day: string): Promise<void> {
+  await env.DB.prepare(
+    `UPDATE campaign_send_counters SET sent_today = sent_today - 1
+     WHERE campaign_id = ?1 AND counter_day = ?2 AND sent_today > 0`
+  ).bind(campaignId, day).run();
+}
+
+async function takeCampaignDailySlot(env: Env, campaignId: string, day: string, weekStart: string, cap: number): Promise<boolean> {
+  const attempt = () => env.DB.prepare(
+    `UPDATE campaign_send_counters SET sent_today = sent_today + 1
+     WHERE campaign_id = ?1 AND counter_day = ?2 AND sent_today < ?3`
+  ).bind(campaignId, day, cap).run();
+  let result = await attempt();
+  if ((result.meta.changes ?? 0) > 0) return true;
+  await env.DB.prepare(
+    `INSERT OR IGNORE INTO campaign_send_counters (campaign_id,counter_day,counter_week,sent_today,sent_this_week)
+     VALUES (?1,?2,?3,0,0)`
+  ).bind(campaignId, day, weekStart).run();
+  result = await attempt();
+  return (result.meta.changes ?? 0) > 0;
+}
+
 async function markFailed(env: Env, messageId: string, error: string): Promise<void> {
   await env.DB
     .prepare(`UPDATE messages SET status = 'failed', error = ?1, updated_at = datetime('now') WHERE id = ?2`)
     .bind(error.slice(0, 500), messageId)
     .run();
+}
+
+interface DeliverySnapshot {
+  senderEmail?: string;
+  ccEmail?: string | null;
+  bccEmail?: string | null;
+  footerHtml?: string;
+}
+
+function deliverySnapshot(message: MessageRow): DeliverySnapshot {
+  if (!message.settings_snapshot) return {};
+  try {
+    const parsed = JSON.parse(message.settings_snapshot) as unknown;
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as DeliverySnapshot : {};
+  } catch { return {}; }
 }
 
 /** Undo a 'sending' claim so the message can be retried later. */
@@ -115,6 +153,31 @@ export async function processSend(env: Env, messageId: string): Promise<SendOutc
     return { action: 'ack', reason: 'lead not found' };
   }
   const testDelivery = deliveryTestEnabled(lead);
+  let campaign = null;
+  if (message.campaign_id) {
+    campaign = await getCampaign(env, message.campaign_id);
+    if (campaign.status !== 'active') {
+      await recordSequenceEvent(env, campaign.id, lead.id, message.id, 'send_deferred', { reason: `campaign_${campaign.status}` });
+      return { action: 'retry', delaySeconds: 900, reason: `campaign is ${campaign.status}` };
+    }
+    const campaignDay = dayString(campaign.timezone);
+    if (campaign.start_date && campaignDay < campaign.start_date) {
+      await recordSequenceEvent(env, campaign.id, lead.id, message.id, 'send_deferred', { reason: 'campaign_not_started' });
+      return { action: 'retry', delaySeconds: 3600, reason: 'campaign has not started' };
+    }
+    if (campaign.end_date && campaignDay > campaign.end_date) {
+      await markFailed(env, messageId, 'campaign end date has passed');
+      await recordSequenceEvent(env, campaign.id, lead.id, message.id, 'send_blocked', { reason: 'campaign_ended' });
+      return { action: 'ack', reason: 'campaign ended' };
+    }
+    if (campaign.maximum_volume !== null) {
+      const sent = await env.DB.prepare(`SELECT COUNT(*) AS n FROM messages WHERE campaign_id=?1 AND direction='outbound' AND status='sent'`).bind(campaign.id).first<{n:number}>();
+      if ((sent?.n ?? 0) >= campaign.maximum_volume) {
+        await recordSequenceEvent(env, campaign.id, lead.id, message.id, 'send_deferred', { reason: 'campaign_volume_cap' });
+        return { action: 'retry', delaySeconds: 86_400, reason: 'campaign volume cap' };
+      }
+    }
+  }
 
   // Gate 1: suppression (final check - the list may have grown since approval).
   const suppressedReason = await isSuppressed(env.DB, lead.email, lead.domain);
@@ -125,21 +188,26 @@ export async function processSend(env: Env, messageId: string): Promise<SendOutc
       .prepare(
         `UPDATE leads SET status = ?1, sales_stage = 'do_not_contact',
            next_action = 'suppressed', updated_at = datetime('now') WHERE id = ?2`
-      )
+    )
       .bind(leadStatus, lead.id)
       .run();
+    if (campaign) {
+      await env.DB.prepare(`UPDATE campaign_leads SET status='suppressed',updated_at=datetime('now') WHERE campaign_id=?1 AND lead_id=?2`).bind(campaign.id, lead.id).run();
+      await recordSequenceEvent(env, campaign.id, lead.id, messageId, 'send_blocked', { reason: 'suppressed' });
+    }
     await recordEvent(env.DB, lead.id, 'send_blocked', { message_id: messageId, reason: suppressedReason });
     return { action: 'ack', reason: 'suppressed' };
   }
 
-  // Gate 2: one cold email per lead.
+  // Gate 2: exactly one initial email, plus one campaign-owned follow-up.
   const dupes = await env.DB
     .prepare(
       `SELECT id, status FROM messages
        WHERE lead_id = ?1 AND direction = 'outbound' AND id != ?2
+         AND (campaign_id IS NULL OR campaign_id != ?3 OR sequence_step != ?4)
          AND status IN ('approved','queued','sending','sent','send_unknown')`
     )
-    .bind(lead.id, messageId)
+    .bind(lead.id, messageId, message.campaign_id ?? '', message.sequence_step)
     .all<{ id: string; status: string }>();
   if (dupes.results.some((row) => priorOutboundBlocksDelivery(testDelivery, row.status))) {
     await markFailed(env, messageId, 'another email was already sent to this lead');
@@ -148,29 +216,39 @@ export async function processSend(env: Env, messageId: string): Promise<SendOutc
   }
 
   // Gate 3: business-hours send window (Africa/Lagos by default).
-  if (!isInSendWindow(env)) {
-    const delay = clampDelay(secondsToNextWindowOpen(env));
+  const sendEnv = campaign ? { ...env, SEND_WINDOW: campaign.send_window, SEND_DAYS: campaign.send_days, TIMEZONE: campaign.timezone } : env;
+  if (!isInSendWindow(sendEnv)) {
+    const delay = clampDelay(secondsToNextWindowOpen(sendEnv));
     await recordEvent(env.DB, lead.id, 'send_deferred', { message_id: messageId, reason: 'window', delay });
     return { action: 'retry', delaySeconds: delay, reason: 'outside send window' };
   }
 
   // Gate 4: daily cap, taken atomically.
-  const day = dayString(env.TIMEZONE);
+  const day = dayString(sendEnv.TIMEZONE);
   const cap = intVar(env.DAILY_SEND_CAP, 10);
   if (!(await takeDailySlot(env, day, cap))) {
-    const delay = clampDelay(secondsToNextWindowOpen(env));
+    const delay = clampDelay(secondsToNextWindowOpen(sendEnv));
     await recordEvent(env.DB, lead.id, 'send_deferred', { message_id: messageId, reason: 'daily_cap', delay });
     return { action: 'retry', delaySeconds: delay, reason: 'daily cap reached' };
+  }
+  let campaignSlotTaken = false;
+  if (campaign && !(await takeCampaignDailySlot(env, campaign.id, day, weekStartString(sendEnv.TIMEZONE), campaign.daily_cap))) {
+    await decrementCounter(env, day);
+    await recordSequenceEvent(env, campaign.id, lead.id, message.id, 'send_deferred', { reason: 'campaign_daily_cap' });
+    return { action: 'retry', delaySeconds: clampDelay(secondsToNextWindowOpen(sendEnv)), reason: 'campaign daily cap reached' };
+  } else if (campaign) {
+    campaignSlotTaken = true;
   }
 
   // Gate 5: per-domain courtesy cap (don't pile onto one company). The slot
   // is reserved atomically so concurrent queue consumers cannot exceed it.
-  const weekStart = weekStartString(env.TIMEZONE);
+  const weekStart = weekStartString(sendEnv.TIMEZONE);
   let domainSlotTaken = false;
   if (!testDelivery) {
-    const domainCap = intVar(env.DOMAIN_WEEKLY_CAP, 2);
+    const domainCap = campaign ? Math.min(intVar(env.DOMAIN_WEEKLY_CAP, 2), campaign.domain_weekly_cap) : intVar(env.DOMAIN_WEEKLY_CAP, 2);
     if (!(await takeDomainSlot(env, weekStart, lead.domain, domainCap))) {
       await decrementCounter(env, day);
+      if (campaignSlotTaken && campaign) await decrementCampaignDailyCounter(env, campaign.id, day);
       await recordEvent(env.DB, lead.id, 'send_deferred', { message_id: messageId, reason: 'domain_cap' });
       return { action: 'retry', delaySeconds: clampDelay(86_400), reason: 'domain weekly cap' };
     }
@@ -187,15 +265,21 @@ export async function processSend(env: Env, messageId: string): Promise<SendOutc
     .run();
   if ((claim.meta.changes ?? 0) === 0) {
     await decrementCounter(env, day);
+    if (campaignSlotTaken && campaign) await decrementCampaignDailyCounter(env, campaign.id, day);
     if (domainSlotTaken) await decrementDomainCounter(env, weekStart, lead.domain);
     return { action: 'ack', reason: 'claimed elsewhere' };
   }
 
-  const finalBody = ensureFooter(message.body ?? '', (await getOutreachSettings(env.DB)).footerHtml);
+  const snapshot = deliverySnapshot(message);
+  const finalBody = ensureFooter(message.body ?? '', snapshot.footerHtml ?? (await getOutreachSettings(env.DB)).footerHtml);
   const subject = message.subject ?? 'Centrisec';
 
   try {
-    const sent = await trySendWithAuthRetry(env, lead.email, subject, finalBody);
+    const sent = await trySendWithAuthRetry(env, lead.email, subject, finalBody, {
+      from: snapshot.senderEmail || message.from_email || undefined,
+      cc: snapshot.ccEmail ?? undefined,
+      bcc: snapshot.bccEmail ?? undefined,
+    });
     await env.DB
       .prepare(
         `UPDATE messages SET status = 'sent', body = ?1, zoho_message_id = COALESCE(?2, zoho_message_id), error = NULL,
@@ -216,6 +300,10 @@ export async function processSend(env: Env, messageId: string): Promise<SendOutc
       dry_run: sent.dryRun,
       delivery_test: testDelivery,
     });
+    if (campaign) {
+      await env.DB.prepare(`UPDATE campaign_leads SET status='sent',updated_at=datetime('now') WHERE campaign_id=?1 AND lead_id=?2`).bind(campaign.id,lead.id).run();
+      await recordSequenceEvent(env,campaign.id,lead.id,message.id,'sent',{step:message.sequence_step});
+    }
     return { action: 'sent', dryRun: sent.dryRun };
   } catch (err) {
     if (err instanceof ZohoError && err.kind === 'permanent') {
@@ -229,14 +317,20 @@ export async function processSend(env: Env, messageId: string): Promise<SendOutc
         .run();
       await addSuppression(env.DB, 'email', lead.email, 'hard_bounce', messageId);
       await decrementCounter(env, day);
+      if (campaignSlotTaken && campaign) await decrementCampaignDailyCounter(env, campaign.id, day);
       if (domainSlotTaken) await decrementDomainCounter(env, weekStart, lead.domain);
       await recordEvent(env.DB, lead.id, 'send_failed', { message_id: messageId, kind: 'permanent' });
+      if (campaign) {
+        await env.DB.prepare(`UPDATE campaign_leads SET status='failed',updated_at=datetime('now') WHERE campaign_id=?1 AND lead_id=?2`).bind(campaign.id, lead.id).run();
+        await recordSequenceEvent(env, campaign.id, lead.id, messageId, 'send_failed', { kind: 'permanent' });
+      }
       return { action: 'ack', reason: 'permanent send failure' };
     }
     const kind = err instanceof ZohoError ? err.kind : 'unknown';
     const messageText = err instanceof Error ? err.message : String(err);
     await revertToQueued(env, messageId, messageText);
     await decrementCounter(env, day);
+    if (campaignSlotTaken && campaign) await decrementCampaignDailyCounter(env, campaign.id, day);
     if (domainSlotTaken) await decrementDomainCounter(env, weekStart, lead.domain);
     await recordEvent(env.DB, lead.id, 'send_failed', { message_id: messageId, kind });
     const delay = kind === 'auth' ? 3600 : 900;
@@ -248,14 +342,16 @@ async function trySendWithAuthRetry(
   env: Env,
   to: string,
   subject: string,
-  content: string
+  content: string,
+  overrides: { from?: string; cc?: string; bcc?: string }
 ): Promise<{ dryRun: boolean; providerMessageId: string | null; internetMessageId: string | null }> {
   const settings = await getOutreachSettings(env.DB);
-  const from = effectiveSenderEmail(settings, env);
-  const copyTo = env.OUTREACH_CC_EMAIL.trim().toLowerCase() === from.trim().toLowerCase()
+  const from = overrides.from || effectiveSenderEmail(settings, env);
+  const defaultCopyTo = env.OUTREACH_CC_EMAIL.trim().toLowerCase() === from.trim().toLowerCase()
     ? undefined
     : env.OUTREACH_CC_EMAIL;
-  const args = { to, subject, content, from, cc: copyTo };
+  const copyTo = overrides.cc ?? defaultCopyTo;
+  const args = { to, subject, content, from, cc: copyTo, bcc: overrides.bcc };
   try {
     return await sendMail(env, args);
   } catch (err) {

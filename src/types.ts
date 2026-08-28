@@ -33,6 +33,60 @@ export type MessageStatus =
   | 'send_unknown'
   | 'received';
 
+export type CampaignStatus = 'draft' | 'active' | 'paused' | 'archived' | 'completed';
+export type QualityPolicy = 'balanced' | 'strict' | 'custom';
+
+export interface SenderProfileRow {
+  id: string;
+  name: string;
+  display_name: string | null;
+  sender_email: string;
+  reply_email: string;
+  cc_email: string | null;
+  bcc_email: string | null;
+  greeting: string;
+  fallback_greeting: string;
+  signoff: string;
+  sender_name: string | null;
+  cta: string;
+  footer_html: string;
+  quality_policy: QualityPolicy;
+  is_verified: number;
+  is_active: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CampaignRow {
+  id: string;
+  name: string;
+  status: CampaignStatus;
+  objective: string | null;
+  owner_label: string | null;
+  notes: string | null;
+  sender_profile_id: string | null;
+  timezone: string;
+  start_date: string | null;
+  end_date: string | null;
+  auto_send: number;
+  follow_up_enabled: number;
+  follow_up_delay_business_days: number;
+  send_window: string;
+  send_days: string;
+  daily_cap: number;
+  domain_weekly_cap: number;
+  maximum_volume: number | null;
+  quality_policy: QualityPolicy;
+  tone: string | null;
+  offer: string | null;
+  cta: string | null;
+  sector_angle: string | null;
+  initial_template: string | null;
+  follow_up_template: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface LeadRow {
   id: string;
   email: string;
@@ -167,6 +221,11 @@ export interface MessageRow {
   draft_quality_status: string | null;
   validation_warnings: string | null;
   next_step_plan: string | null;
+  campaign_id: string | null;
+  sender_profile_id: string | null;
+  sequence_step: number;
+  settings_snapshot: string | null;
+  quality_snapshot: string | null;
 }
 
 export type ReplyMatchStatus =

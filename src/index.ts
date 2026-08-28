@@ -25,6 +25,18 @@ import { processSend } from './sending';
 import { ensureDraftingSchema } from './schema';
 import { handleStats } from './stats';
 import {
+  handleCampaignGet,
+  handleCampaignClone,
+  handleCampaignStopUnsent,
+  handleCampaignLeadPost,
+  handleCampaignPatch,
+  handleCampaignPost,
+  handleCampaignsList,
+  handleSenderProfilePatch,
+  handleSenderProfilePost,
+  handleSenderProfilesList,
+} from './services/campaigns';
+import {
   handleSuppressionAdd,
   handleSuppressionDelete,
   handleSuppressionList,
@@ -86,6 +98,31 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
       return handleMessageReject(id, await readJsonOptional(request), env);
     }
     if (id && method === 'POST' && action === 'send-now') return handleSendNow(id, env);
+  }
+
+  if (resource === 'sender-profiles') {
+    if (!id) {
+      if (method === 'GET') return handleSenderProfilesList(env);
+      if (method === 'POST') return handleSenderProfilePost(await readJson(request), env);
+    } else if (!action && method === 'PATCH') {
+      return handleSenderProfilePatch(id, await readJson(request), env);
+    }
+  }
+
+  if (resource === 'campaigns') {
+    if (!id) {
+      if (method === 'GET') return handleCampaignsList(env);
+      if (method === 'POST') return handleCampaignPost(await readJson(request), env);
+    } else if (!action) {
+      if (method === 'GET') return handleCampaignGet(id, env);
+      if (method === 'PATCH') return handleCampaignPatch(id, await readJson(request), env);
+    } else if (action === 'leads' && method === 'POST') {
+      return handleCampaignLeadPost(id, await readJson(request), env);
+    } else if (action === 'clone' && method === 'POST') {
+      return handleCampaignClone(id, env);
+    } else if (action === 'stop-unsent' && method === 'POST') {
+      return handleCampaignStopUnsent(id, env);
+    }
   }
 
   if (resource === 'replies' && !id) {

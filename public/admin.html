@@ -147,7 +147,8 @@
       <button id="logout" class="small" title="Forget the dashboard PIN on this browser">Lock</button>
     </div>
     <nav id="tabs">
-      <button data-tab="pipeline" class="active">Pipeline</button>
+      <button data-tab="pipeline" class="active">Overview</button>
+      <button data-tab="campaigns">Campaigns</button>
       <button data-tab="drafts">Drafts</button>
       <button data-tab="replies">Replies</button>
       <button data-tab="suppression">Suppression</button>
@@ -167,11 +168,13 @@
         <input id="f-q" placeholder="Search email, name, company…" style="min-width:220px">
         <button id="f-apply" class="primary">Filter</button>
         <button id="f-advance" title="Score new leads and draft fit ones now">Run pipeline now</button>
+        <select id="lead-campaign" aria-label="Campaign for selected leads"><option value="">Assign selected to campaign…</option></select>
+        <button id="lead-assign">Assign</button>
         <span id="lead-count" class="muted small"></span>
       </div>
       <div class="table-wrap"><table id="leads-table">
         <thead><tr>
-          <th>Contact</th><th>Company</th><th>Segment</th><th>Fit</th><th>Status</th><th>Reply</th><th>Updated</th>
+          <th></th><th>Contact</th><th>Company</th><th>Segment</th><th>Fit</th><th>Status</th><th>Reply</th><th>Updated</th>
         </tr></thead>
         <tbody></tbody>
       </table></div>
@@ -307,6 +310,64 @@
         <div class="footer-preview-wrap"><p class="muted small" style="margin:0 0 7px">HTML footer preview</p><iframe id="outreach-footer-preview" title="HTML footer preview" sandbox="" style="width:100%;min-height:130px;border:1px solid var(--line);border-radius:8px;background:#fff"></iframe></div>
         <div class="row" style="margin-top:12px"><button id="outreach-settings-save" class="primary">Save email wording</button><span id="outreach-settings-feedback" class="feedback" aria-live="polite"></span></div>
       </div>
+      <div class="card" style="max-width:900px;margin-top:14px">
+        <div class="row"><div class="grow"><h2 style="margin:0">Sender profiles</h2><p class="muted small" style="margin:4px 0">A profile snapshots its sender, footer, writing defaults, and internal copies into every campaign draft.</p></div><button id="profile-new">New sender profile</button></div>
+        <div id="profile-editor" class="hidden" style="margin-top:12px">
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px">
+            <label>Name<input id="profile-name" placeholder="Centrisec Sales" style="width:100%"></label>
+            <label>Display name<input id="profile-display" placeholder="Centrisec" style="width:100%"></label>
+            <label>Zoho-approved sender / reply inbox<input id="profile-sender" type="email" placeholder="info@centrisec.com" style="width:100%"></label>
+            <label>Internal CC<input id="profile-cc" type="email" placeholder="Optional" style="width:100%"></label>
+            <label>Internal BCC<input id="profile-bcc" type="email" placeholder="Optional" style="width:100%"></label>
+            <label>Greeting<input id="profile-greeting" value="Hi" style="width:100%"></label>
+            <label>Fallback greeting<input id="profile-fallback" value="Hello" style="width:100%"></label>
+            <label>Signoff<input id="profile-signoff" value="Best regards" style="width:100%"></label>
+            <label>Optional sender name<input id="profile-sender-name" placeholder="Leave blank to use footer" style="width:100%"></label>
+            <label>Default CTA<input id="profile-cta" placeholder="Would it be useful if I sent it over?" style="width:100%"></label>
+          </div>
+          <label style="display:block;margin-top:10px">HTML footer<textarea id="profile-footer" rows="5"></textarea></label>
+          <iframe id="profile-footer-preview" class="signature-frame" sandbox="" title="Sender profile footer preview"></iframe>
+          <div class="row" style="margin-top:10px"><label><input id="profile-confirm-zoho" type="checkbox"> I confirm this alternate sender is Zoho-approved</label><button id="profile-save" class="primary">Save profile</button><button id="profile-cancel">Cancel</button><span id="profile-feedback" class="feedback"></span></div>
+        </div>
+        <div id="profile-list" style="margin-top:12px"></div>
+      </div>
+    </section>
+
+    <section id="tab-campaigns" class="hidden">
+      <div class="toolbar">
+        <div class="grow"><b>Campaign workspace</b><div class="muted small">Draft, queue, pause, and review every outbound sequence in one place.</div></div>
+        <button id="campaign-new" class="primary">Create campaign</button>
+        <button id="campaigns-refresh">Refresh</button>
+      </div>
+      <div id="campaign-form-wrap" class="card hidden">
+        <h2 id="campaign-form-title" style="margin-top:0">New campaign</h2>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px">
+          <label>Campaign name<input id="campaign-name" placeholder="Q4 fintech readiness" style="width:100%"></label>
+          <label>Sender profile<select id="campaign-profile" style="width:100%"></select></label>
+          <label>Objective<input id="campaign-objective" placeholder="Start practical security conversations" style="width:100%"></label>
+          <label>Owner<input id="campaign-owner" placeholder="Internal owner" style="width:100%"></label>
+          <label>Timezone<input id="campaign-timezone" value="Africa/Lagos" style="width:100%"></label>
+          <label>Status<select id="campaign-status" style="width:100%"><option value="draft">Draft</option><option value="active">Active</option><option value="paused">Paused</option></select></label>
+          <label>Planned start<input id="campaign-start" type="date" style="width:100%"></label>
+          <label>Planned end<input id="campaign-end" type="date" style="width:100%"></label>
+          <label>Send days<input id="campaign-days" value="1,2,3,4,5" style="width:100%"></label>
+          <label>Send window<input id="campaign-window" value="09:00-16:00" style="width:100%"></label>
+          <label>Daily cap<input id="campaign-daily-cap" type="number" min="1" value="10" style="width:100%"></label>
+          <label>Per-domain weekly cap<input id="campaign-domain-cap" type="number" min="1" value="2" style="width:100%"></label>
+          <label>Maximum volume<input id="campaign-max-volume" type="number" min="1" placeholder="Optional" style="width:100%"></label>
+          <label>Quality policy<select id="campaign-quality" style="width:100%"><option value="balanced">Balanced</option><option value="strict">Strict</option><option value="custom">Custom</option></select></label>
+          <label>Offer<input id="campaign-offer" placeholder="Use sender profile default" style="width:100%"></label>
+          <label>CTA<input id="campaign-cta" placeholder="Use sender profile default" style="width:100%"></label>
+          <label>Sector angle<input id="campaign-angle" placeholder="Use lead data by default" style="width:100%"></label>
+          <label>Tone<input id="campaign-tone" placeholder="Clear, practical, and calm" style="width:100%"></label>
+        </div>
+        <div class="row" style="margin-top:12px"><label><input id="campaign-auto-send" type="checkbox" checked> Auto-send sendable drafts</label><label><input id="campaign-follow-up" type="checkbox" checked> One follow-up after <input id="campaign-follow-up-days" type="number" min="1" max="14" value="4" style="width:55px"> business days</label></div>
+        <label style="display:block;margin-top:12px">Initial email template <span class="muted small">Optional. Variables: {{first_name}}, {{company_name}}, {{industry}}, {{role}}</span><textarea id="campaign-initial-template" rows="5" placeholder="Leave blank to use the campaign strategy and AI drafting rules."></textarea></label>
+        <label style="display:block;margin-top:10px">Follow-up template <span class="muted small">Optional. One follow-up only.</span><textarea id="campaign-follow-template" rows="4" placeholder="Leave blank to use the safe Centrisec follow-up."></textarea></label>
+        <label style="display:block;margin-top:10px">Internal notes<textarea id="campaign-notes" rows="2"></textarea></label>
+        <div class="row" style="margin-top:12px"><button id="campaign-save" class="primary">Save campaign</button><button id="campaign-cancel">Cancel</button><span id="campaign-feedback" class="feedback"></span></div>
+      </div>
+      <div id="campaign-list"></div>
     </section>
   </main>
 </div>
@@ -339,6 +400,9 @@ const state = {
   drafting: new Set(),
   draftMessages: [],
   draftSelection: new Set(),
+  campaignEditing: null,
+  profileEditing: null,
+  leadSelection: new Set(),
 };
 
 const $ = (sel) => document.querySelector(sel);
@@ -486,6 +550,12 @@ async function loadLeads() {
   params.set('limit', String(state.pageSize));
   params.set('offset', String(state.page * state.pageSize));
   const data = await api('/leads?' + params.toString());
+  if (!$('#lead-campaign').dataset.loaded) {
+    const campaigns = await api('/campaigns');
+    const picker = $('#lead-campaign'); const selected = picker.value;
+    picker.replaceChildren(el('option', { value: '' }, 'Assign selected to campaign…'), ...campaigns.campaigns.filter((c) => !['archived','completed'].includes(c.status)).map((c) => el('option', { value: c.id }, c.name)));
+    picker.value = selected; picker.dataset.loaded = '1';
+  }
   state.total = data.total;
   $('#lead-count').textContent = data.total + ' lead(s)';
   $('#page-info').textContent = 'Page ' + (state.page + 1) + ' of ' + Math.max(1, Math.ceil(data.total / state.pageSize));
@@ -493,6 +563,7 @@ async function loadLeads() {
   const tbody = $('#leads-table tbody');
   tbody.replaceChildren(...data.leads.map((l) =>
     el('tr', { onclick: () => openLead(l.id) },
+      el('td', {}, el('input', { type: 'checkbox', checked: state.leadSelection.has(l.id), onclick: (event) => event.stopPropagation(), onchange: (event) => { if (event.target.checked) state.leadSelection.add(l.id); else state.leadSelection.delete(l.id); } })),
       el('td', {},
         el('div', {}, [l.first_name, l.last_name].filter(Boolean).join(' ') || '—'),
         el('div', { class: 'muted small' }, l.email)),
@@ -505,7 +576,7 @@ async function loadLeads() {
     )
   ));
   if (data.leads.length === 0) {
-    tbody.replaceChildren(el('tr', {}, el('td', { colspan: '7', class: 'empty' }, 'No leads match.')));
+    tbody.replaceChildren(el('tr', {}, el('td', { colspan: '8', class: 'empty' }, 'No leads match.')));
   }
 }
 
@@ -1045,7 +1116,7 @@ async function loadSuppression() {
 /* ---------- Settings tab ---------- */
 
 async function loadSettings() {
-  const [data, wording] = await Promise.all([api('/admin/ai/models'), api('/admin/outreach/settings')]);
+  const [data, wording, profileData] = await Promise.all([api('/admin/ai/models'), api('/admin/outreach/settings'), api('/sender-profiles')]);
   const select = $('#ai-model');
   select.replaceChildren(...data.models.map((model) => el('option', { value: model }, model)));
   select.value = data.activeModel;
@@ -1064,6 +1135,7 @@ async function loadSettings() {
   const ctaMode = $('#outreach-cta-mode');
   ctaMode.value = presetModes[settings.cta] || (settings.cta === 'Would it be useful if I sent it over?' ? 'auto' : 'custom');
   $('#outreach-custom-cta-wrap').classList.toggle('hidden', ctaMode.value !== 'custom');
+  renderProfiles(profileData.profiles || []);
 }
 
 function updateFooterPreview() {
@@ -1072,10 +1144,143 @@ function updateFooterPreview() {
   $('#outreach-footer-preview').srcdoc = '<!doctype html><html><body style="margin:16px">' + (footer || empty) + '</body></html>';
 }
 
+function profilePayload() {
+  return {
+    name: $('#profile-name').value.trim(), displayName: $('#profile-display').value.trim(), senderEmail: $('#profile-sender').value.trim(),
+    replyEmail: $('#profile-sender').value.trim(), ccEmail: $('#profile-cc').value.trim(), bccEmail: $('#profile-bcc').value.trim(),
+    greeting: $('#profile-greeting').value.trim(), fallbackGreeting: $('#profile-fallback').value.trim(), signoff: $('#profile-signoff').value.trim(),
+    senderName: $('#profile-sender-name').value.trim(), cta: $('#profile-cta').value.trim(), footerHtml: $('#profile-footer').value,
+    confirmZohoApproved: $('#profile-confirm-zoho').checked,
+  };
+}
+
+function updateProfileFooterPreview() {
+  const content = $('#profile-footer').value.trim() || '<p style="color:#667085">Footer preview</p>';
+  $('#profile-footer-preview').srcdoc = '<!doctype html><html><body style="margin:16px">' + content + '</body></html>';
+}
+
+function editProfile(profile = null) {
+  state.profileEditing = profile ? profile.id : null;
+  $('#profile-name').value = profile?.name || ''; $('#profile-display').value = profile?.display_name || '';
+  $('#profile-sender').value = profile?.sender_email || ''; $('#profile-cc').value = profile?.cc_email || ''; $('#profile-bcc').value = profile?.bcc_email || '';
+  $('#profile-greeting').value = profile?.greeting || 'Hi'; $('#profile-fallback').value = profile?.fallback_greeting || 'Hello';
+  $('#profile-signoff').value = profile?.signoff || 'Best regards'; $('#profile-sender-name').value = profile?.sender_name || '';
+  $('#profile-cta').value = profile?.cta || ''; $('#profile-footer').value = profile?.footer_html || ''; $('#profile-confirm-zoho').checked = false;
+  $('#profile-feedback').textContent = ''; updateProfileFooterPreview(); $('#profile-editor').classList.remove('hidden');
+}
+
+function renderProfiles(profiles) {
+  const list = $('#profile-list');
+  list.replaceChildren(...profiles.map((profile) => el('div', { class: 'card', style: 'padding:10px;margin:6px 0' },
+    el('div', { class: 'row' }, el('b', { class: 'grow' }, profile.name), chip(profile.is_verified ? 'verified' : 'unverified', profile.is_verified ? 'cl-' : 'st-'), profile.is_active ? null : chip('inactive', 'st-')),
+    el('div', { class: 'muted small' }, `${profile.sender_email} · replies arrive at the sender mailbox`),
+    el('div', { class: 'row', style: 'margin-top:6px' }, el('button', { onclick: () => editProfile(profile) }, 'Edit'))
+  )));
+}
+
+/* ---------- Campaigns ---------- */
+
+function campaignPayload() {
+  return {
+    name: $('#campaign-name').value.trim(), senderProfileId: $('#campaign-profile').value,
+    objective: $('#campaign-objective').value.trim(), ownerLabel: $('#campaign-owner').value.trim(),
+    notes: $('#campaign-notes').value.trim(), timezone: $('#campaign-timezone').value.trim(), status: $('#campaign-status').value,
+    startDate: $('#campaign-start').value, endDate: $('#campaign-end').value,
+    sendDays: $('#campaign-days').value.trim(), sendWindow: $('#campaign-window').value.trim(),
+    dailyCap: Number($('#campaign-daily-cap').value), domainWeeklyCap: Number($('#campaign-domain-cap').value),
+    maximumVolume: $('#campaign-max-volume').value.trim(), qualityPolicy: $('#campaign-quality').value,
+    offer: $('#campaign-offer').value.trim(), cta: $('#campaign-cta').value.trim(), sectorAngle: $('#campaign-angle').value.trim(), tone: $('#campaign-tone').value.trim(),
+    autoSend: $('#campaign-auto-send').checked, followUpEnabled: $('#campaign-follow-up').checked,
+    followUpDelayBusinessDays: Number($('#campaign-follow-up-days').value),
+    initialTemplate: $('#campaign-initial-template').value, followUpTemplate: $('#campaign-follow-template').value,
+  };
+}
+
+function fillCampaignForm(campaign = null) {
+  state.campaignEditing = campaign ? campaign.id : null;
+  $('#campaign-form-title').textContent = campaign ? 'Edit campaign' : 'New campaign';
+  $('#campaign-name').value = campaign?.name || '';
+  $('#campaign-profile').value = campaign?.sender_profile_id || $('#campaign-profile').value;
+  $('#campaign-objective').value = campaign?.objective || ''; $('#campaign-owner').value = campaign?.owner_label || '';
+  $('#campaign-notes').value = campaign?.notes || ''; $('#campaign-timezone').value = campaign?.timezone || 'Africa/Lagos';
+  $('#campaign-status').value = campaign?.status || 'draft'; $('#campaign-days').value = campaign?.send_days || '1,2,3,4,5';
+  $('#campaign-start').value = campaign?.start_date || ''; $('#campaign-end').value = campaign?.end_date || '';
+  $('#campaign-window').value = campaign?.send_window || '09:00-16:00'; $('#campaign-daily-cap').value = campaign?.daily_cap || 10;
+  $('#campaign-domain-cap').value = campaign?.domain_weekly_cap || 2; $('#campaign-max-volume').value = campaign?.maximum_volume || '';
+  $('#campaign-quality').value = campaign?.quality_policy || 'balanced'; $('#campaign-offer').value = campaign?.offer || '';
+  $('#campaign-cta').value = campaign?.cta || ''; $('#campaign-angle').value = campaign?.sector_angle || ''; $('#campaign-tone').value = campaign?.tone || '';
+  $('#campaign-auto-send').checked = campaign ? campaign.auto_send === 1 : true; $('#campaign-follow-up').checked = campaign ? campaign.follow_up_enabled === 1 : true;
+  $('#campaign-follow-up-days').value = campaign?.follow_up_delay_business_days || 4; $('#campaign-initial-template').value = campaign?.initial_template || '';
+  $('#campaign-follow-template').value = campaign?.follow_up_template || ''; $('#campaign-feedback').textContent = '';
+  $('#campaign-form-wrap').classList.remove('hidden'); $('#campaign-name').focus();
+}
+
+async function loadCampaigns() {
+  const [data, profileData] = await Promise.all([api('/campaigns'), api('/sender-profiles')]);
+  const profile = $('#campaign-profile');
+  const current = profile.value;
+  profile.replaceChildren(...profileData.profiles.filter((p) => p.is_active).map((p) => el('option', { value: p.id }, `${p.name} · ${p.sender_email}${p.is_verified ? '' : ' (unverified)'}`)));
+  if (current) profile.value = current;
+  $('#lead-campaign').dataset.loaded = '';
+  const list = $('#campaign-list');
+  if (!data.campaigns.length) { list.replaceChildren(el('div', { class: 'card empty' }, 'No campaigns yet. Create a draft campaign, add leads, then activate it when ready.')); return; }
+  list.replaceChildren(...data.campaigns.map((c) => el('div', { class: 'card' },
+    el('div', { class: 'row' }, el('b', { class: 'grow' }, c.name), chip(c.status, 'st-'), el('span', { class: 'muted small' }, c.sender_profile_name || 'No sender profile')),
+    el('div', { class: 'muted small', style: 'margin-top:5px' }, `${c.audience_count || 0} audience · ${c.sent_count || 0} sent · ${c.replied_count || 0} replied · ${c.send_window} ${c.timezone}`),
+    el('div', { class: 'row', style: 'margin-top:10px' },
+      el('button', { class: 'primary', onclick: () => openCampaign(c.id) }, 'Open'),
+      el('button', { onclick: () => fillCampaignForm(c) }, 'Edit'),
+      el('button', { onclick: async () => { try { await api('/campaigns/' + c.id + '/clone', { method: 'POST' }); toast('Campaign cloned as a draft'); await loadCampaigns(); } catch (err) { toast(err.message, true); } } }, 'Clone'),
+      c.status === 'active' ? el('button', { onclick: () => updateCampaignStatus(c.id, 'paused') }, 'Pause') : c.status === 'paused' || c.status === 'draft' ? el('button', { onclick: () => updateCampaignStatus(c.id, 'active') }, 'Activate') : null,
+      c.status !== 'archived' ? el('button', { class: 'danger', onclick: async () => { if (!confirm('Stop all unsent messages in this campaign? This cannot be undone.')) return; try { const result = await api('/campaigns/' + c.id + '/stop-unsent', { method: 'POST' }); toast(result.stopped + ' unsent message(s) stopped'); await loadCampaigns(); } catch (err) { toast(err.message, true); } } }, 'Stop unsent') : null,
+      c.status !== 'archived' ? el('button', { class: 'danger', onclick: () => updateCampaignStatus(c.id, 'archived') }, 'Archive') : null
+    )
+  )));
+}
+
+async function updateCampaignStatus(id, status) {
+  try { await api('/campaigns/' + id, { method: 'PATCH', body: { status } }); toast('Campaign ' + status); await Promise.all([loadCampaigns(), refreshStats()]); }
+  catch (err) { toast(err.message, true); }
+}
+
+async function openCampaign(id) {
+  const data = await api('/campaigns/' + id);
+  const c = data.campaign;
+  const ids = el('textarea', { rows: '3', placeholder: 'Paste lead IDs, separated by commas or new lines' });
+  const audience = el('div', {}, ...(data.audience.length ? data.audience.map((lead) => el('div', { class: 'row card', style: 'padding:8px;margin:6px 0' },
+    el('span', { class: 'grow' }, lead.email, lead.company ? ' · ' + lead.company : ''), chip(lead.campaign_status, 'st-'))) : [el('p', { class: 'empty' }, 'No leads assigned yet.')]));
+  const timeline = el('div', { class: 'timeline' }, ...(data.events.length ? data.events.map((event) => el('div', {}, el('b', {}, event.event), ' ', el('span', { class: 'muted' }, fmtDate(event.created_at)))) : [el('div', { class: 'muted' }, 'No campaign activity yet.')]));
+  const add = el('button', { class: 'primary' }, 'Add leads');
+  add.addEventListener('click', async () => {
+    const leadIds = ids.value.split(/[\s,]+/).map((v) => v.trim()).filter(Boolean);
+    if (!leadIds.length) { toast('Paste at least one lead ID', true); return; }
+    add.disabled = true;
+    try { await api('/campaigns/' + id + '/leads', { method: 'POST', body: { leadIds } }); toast(leadIds.length + ' lead(s) assigned'); closeLayer('modal'); await openCampaign(id); await loadCampaigns(); }
+    catch (err) { toast(err.message, true); } finally { add.disabled = false; }
+  });
+  const draft = el('button', {}, 'Generate eligible drafts');
+  draft.addEventListener('click', async () => {
+    const eligible = data.audience.filter((lead) => lead.campaign_status === 'eligible');
+    if (!eligible.length) { toast('No eligible leads to draft', true); return; }
+    draft.disabled = true; let completed = 0;
+    try { for (const lead of eligible) { await api('/leads/' + lead.id + '/draft', { method: 'POST', body: {} }); completed++; } toast(completed + ' draft(s) generated'); await openCampaign(id); await loadCampaigns(); }
+    catch (err) { toast(completed + ' drafted. ' + err.message, true); } finally { draft.disabled = false; }
+  });
+  $('#modal-content').replaceChildren(
+    el('div', { class: 'row' }, el('h2', { class: 'grow', style: 'margin:0' }, c.name), chip(c.status, 'st-'), el('button', { onclick: () => closeLayer('modal') }, 'Close')),
+    el('div', { class: 'kv' }, el('div', {}, 'Sender'), el('div', {}, data.profile ? `${data.profile.name} · ${data.profile.sender_email}` : 'Missing'), el('div', {}, 'Automation'), el('div', {}, `${c.auto_send ? 'Auto-send on' : 'Manual queue'} · ${c.follow_up_enabled ? 'one follow-up in ' + c.follow_up_delay_business_days + ' business days' : 'No follow-up'}`), el('div', {}, 'Policy'), el('div', {}, `${c.quality_policy} · ${c.daily_cap}/day · ${c.domain_weekly_cap}/domain/week`)),
+    el('h3', {}, 'Audience'), ids, el('div', { class: 'row', style: 'margin-top:8px' }, add, draft), audience,
+    el('h3', {}, 'Funnel'), el('pre', {}, JSON.stringify(data.funnel, null, 2)),
+    el('h3', {}, 'Activity'), timeline
+  );
+  $('#modal-wrap').classList.remove('hidden');
+}
+
 /* ---------- Tabs / init ---------- */
 
 const loaders = {
   pipeline: loadLeads,
+  campaigns: loadCampaigns,
   drafts: loadDrafts,
   replies: loadReplies,
   suppression: loadSuppression,
@@ -1128,6 +1333,29 @@ $('#drafts-regenerate-all').addEventListener('click', () => regenerateVisibleDra
 ['#draft-view', '#draft-date-from', '#draft-date-to', '#draft-date-sort'].forEach((selector) => {
   $(selector).addEventListener('change', () => loadDrafts().catch((e) => toast(e.message, true)));
 });
+$('#lead-assign').addEventListener('click', async () => {
+  const campaignId = $('#lead-campaign').value; const leadIds = [...state.leadSelection];
+  if (!campaignId || !leadIds.length) { toast('Select at least one lead and a campaign', true); return; }
+  try { await api('/campaigns/' + campaignId + '/leads', { method: 'POST', body: { leadIds } }); state.leadSelection.clear(); toast(leadIds.length + ' lead(s) assigned'); await loadLeads(); }
+  catch (err) { toast(err.message, true); }
+});
+$('#campaign-new').addEventListener('click', () => fillCampaignForm());
+$('#campaign-cancel').addEventListener('click', () => $('#campaign-form-wrap').classList.add('hidden'));
+$('#campaigns-refresh').addEventListener('click', () => loadCampaigns().catch((e) => toast(e.message, true)));
+$('#campaign-save').addEventListener('click', async () => {
+  const button = $('#campaign-save'); const feedback = $('#campaign-feedback');
+  button.disabled = true; feedback.textContent = 'Saving…';
+  try {
+    const payload = campaignPayload();
+    const result = state.campaignEditing
+      ? await api('/campaigns/' + state.campaignEditing, { method: 'PATCH', body: payload })
+      : await api('/campaigns', { method: 'POST', body: payload });
+    feedback.className = 'feedback success'; feedback.textContent = 'Campaign saved.';
+    $('#campaign-form-wrap').classList.add('hidden'); await loadCampaigns();
+    if (result.campaign) toast('Campaign saved');
+  } catch (err) { feedback.className = 'feedback bad'; feedback.textContent = err.message; }
+  finally { button.disabled = false; }
+});
 $('#drafts-select-visible').addEventListener('click', () => {
   for (const message of visibleDrafts()) state.draftSelection.add(message.id);
   updateDraftSelectionStatus();
@@ -1177,6 +1405,19 @@ $('#outreach-cta-mode').addEventListener('change', () => {
   $('#outreach-custom-cta-wrap').classList.toggle('hidden', $('#outreach-cta-mode').value !== 'custom');
 });
 $('#outreach-footer-html').addEventListener('input', updateFooterPreview);
+$('#profile-new').addEventListener('click', () => editProfile());
+$('#profile-cancel').addEventListener('click', () => $('#profile-editor').classList.add('hidden'));
+$('#profile-footer').addEventListener('input', updateProfileFooterPreview);
+$('#profile-save').addEventListener('click', async () => {
+  const button = $('#profile-save'); const feedback = $('#profile-feedback'); button.disabled = true; feedback.textContent = 'Saving…';
+  try {
+    const payload = profilePayload();
+    if (state.profileEditing) await api('/sender-profiles/' + state.profileEditing, { method: 'PATCH', body: payload });
+    else await api('/sender-profiles', { method: 'POST', body: payload });
+    feedback.className = 'feedback success'; feedback.textContent = 'Sender profile saved.'; $('#profile-editor').classList.add('hidden'); await loadSettings();
+  } catch (err) { feedback.className = 'feedback bad'; feedback.textContent = err.message; }
+  finally { button.disabled = false; }
+});
 $('#outreach-settings-save').addEventListener('click', async () => {
   const btn = $('#outreach-settings-save');
   const feedback = $('#outreach-settings-feedback');

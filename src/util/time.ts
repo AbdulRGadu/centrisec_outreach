@@ -116,3 +116,21 @@ export function secondsToNextWindowOpen(env: Env, from = new Date()): number {
   }
   return 3600; // defensive fallback: try again in an hour
 }
+
+/** Count completed Monday-Friday calendar days between a sent timestamp and now. */
+export function businessDaysElapsed(sentAt: string, tz: string, now = new Date()): number {
+  const sent = new Date(sentAt.endsWith('Z') ? sentAt : `${sentAt.replace(' ', 'T')}Z`);
+  if (Number.isNaN(sent.getTime())) return 0;
+  const start = dayString(tz, sent);
+  const end = dayString(tz, now);
+  if (start >= end) return 0;
+  let cursor = new Date(`${start}T00:00:00Z`);
+  const endDate = new Date(`${end}T00:00:00Z`);
+  let days = 0;
+  while (cursor < endDate) {
+    cursor = new Date(cursor.getTime() + 86_400_000);
+    const weekday = cursor.getUTCDay();
+    if (weekday !== 0 && weekday !== 6) days += 1;
+  }
+  return days;
+}

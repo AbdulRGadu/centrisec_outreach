@@ -1,10 +1,11 @@
 import type { Env } from './env';
 import type { ProspectSegment } from './services/leadSegmentation';
 import schemaConvergenceMigration from '../migrations/0007_production_schema_convergence.sql';
+import campaignWorkspaceMigration from '../migrations/0008_campaign_workspace.sql';
 import { formatD1ExecScript } from './util/sql';
 
-const MIGRATION_ID = 7;
-const MIGRATION_NAME = '0007_production_schema_convergence.sql';
+const MIGRATION_ID = 8;
+const MIGRATION_NAME = '0008_campaign_workspace.sql';
 const REQUIRED_COLUMNS = {
   leads: {
     sub_industry: 'sub_industry TEXT',
@@ -30,6 +31,11 @@ const REQUIRED_COLUMNS = {
     draft_quality_status: "draft_quality_status TEXT CHECK (draft_quality_status IN ('passed','needs_review'))",
     validation_warnings: 'validation_warnings TEXT',
     next_step_plan: 'next_step_plan TEXT',
+    campaign_id: 'campaign_id TEXT',
+    sender_profile_id: 'sender_profile_id TEXT',
+    sequence_step: 'sequence_step INTEGER NOT NULL DEFAULT 1',
+    settings_snapshot: 'settings_snapshot TEXT',
+    quality_snapshot: 'quality_snapshot TEXT',
   },
 } as const;
 
@@ -60,6 +66,14 @@ CREATE INDEX IF NOT EXISTS idx_reply_ingest_created ON reply_ingest_logs(payload
 CREATE INDEX IF NOT EXISTS idx_reply_ingest_message ON reply_ingest_logs(message_id);
 `;
 
+// Runtime convergence is idempotent. The checked-in migration still contains
+// ALTER statements for Wrangler's migration runner, so omit those here after
+// ensureColumn has made each message field safe to add concurrently.
+const CAMPAIGN_RUNTIME_SCHEMA = formatD1ExecScript(campaignWorkspaceMigration)
+  .split('\n')
+  .filter((statement) => !/^ALTER TABLE messages ADD COLUMN /i.test(statement))
+  .join('\n');
+
 let readiness: Promise<void> | null = null;
 
 async function tableColumns(db: D1Database, table: string): Promise<Set<string>> {
@@ -67,7 +81,7 @@ async function tableColumns(db: D1Database, table: string): Promise<Set<string>>
   return new Set(rows.results.map((row) => row.name));
 }
 
-async function schemaIsReady(db: D1Database): Promise<boolean> {
+async function coreSchemaIsReady(db: D1Database): Promise<boolean> {
   const [leadColumns, messageColumns] = await Promise.all([
     tableColumns(db, 'leads'),
     tableColumns(db, 'messages'),
@@ -84,6 +98,14 @@ async function schemaIsReady(db: D1Database): Promise<boolean> {
     && !!replyTable
     && (sql.get('leads') ?? '').includes("'replied_positive'")
     && (sql.get('messages') ?? '').includes("'needs_review'");
+}
+
+async function schemaIsReady(db: D1Database): Promise<boolean> {
+  if (!(await coreSchemaIsReady(db))) return false;
+  const tables = await db.prepare(
+    "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('sender_profiles','campaigns','campaign_leads','campaign_templates','campaign_send_policies','campaign_send_counters','sequence_events')"
+  ).all<{ name: string }>();
+  return tables.results.length === 7;
 }
 
 async function recordMigration(db: D1Database): Promise<void> {
@@ -103,21 +125,26 @@ async function ensureColumn(db: D1Database, table: keyof typeof REQUIRED_COLUMNS
 }
 
 async function applyRequiredSchema(env: Env): Promise<void> {
-  for (const [table, columns] of Object.entries(REQUIRED_COLUMNS)) {
-    for (const [name, definition] of Object.entries(columns)) {
-      await ensureColumn(env.DB, table as keyof typeof REQUIRED_COLUMNS, name, definition);
+  const ensureColumns = async () => {
+    for (const [table, columns] of Object.entries(REQUIRED_COLUMNS)) {
+      for (const [name, definition] of Object.entries(columns)) {
+        await ensureColumn(env.DB, table as keyof typeof REQUIRED_COLUMNS, name, definition);
+      }
     }
-  }
+  };
+  await ensureColumns();
   await env.DB.exec(formatD1ExecScript(REPLY_INGEST_SCHEMA));
-  if (!(await schemaIsReady(env.DB))) {
+  if (!(await coreSchemaIsReady(env.DB))) {
     try {
       await env.DB.exec(formatD1ExecScript(schemaConvergenceMigration));
     } catch (error) {
       // Concurrent isolates can race while converging the same legacy schema.
-      if (!(await schemaIsReady(env.DB))) throw error;
+      if (!(await coreSchemaIsReady(env.DB))) throw error;
     }
   }
-  if (!(await schemaIsReady(env.DB))) throw new Error('Drafting schema remains incomplete');
+  await ensureColumns();
+  await env.DB.exec(CAMPAIGN_RUNTIME_SCHEMA);
+  if (!(await schemaIsReady(env.DB))) throw new Error('Campaign workspace schema remains incomplete');
   await recordMigration(env.DB);
 }
 

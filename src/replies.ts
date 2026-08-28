@@ -18,6 +18,7 @@ import {
   type ReplyNextAction,
 } from './services/nextStepPlanner';
 import { addSuppression, isSuppressed } from './suppression';
+import { recordSequenceEvent } from './services/campaigns';
 import type { LeadRow, MessageRow, ReplyMatchStatus } from './types';
 import { detectReplyOptOut, domainOf, latestReplyText, looksLikeHardBounce } from './util/text';
 
@@ -398,6 +399,20 @@ async function applyReplyOutcome(
     `UPDATE leads SET status = ?1, sales_stage = ?2, next_action = ?3,
        last_reply_classification = ?4, updated_at = datetime('now') WHERE id = ?5`
   ).bind(status, salesStage, nextAction, classification, lead.id).run();
+  const campaignMessage = await env.DB.prepare(
+    `SELECT campaign_id FROM messages
+     WHERE lead_id=?1 AND direction='outbound' AND campaign_id IS NOT NULL
+     ORDER BY sent_at DESC, created_at DESC LIMIT 1`
+  ).bind(lead.id).first<{ campaign_id: string | null }>();
+  if (campaignMessage?.campaign_id) {
+    // A reply always ends the sequence. The event retains its exact reason;
+    // campaign_leads deliberately keeps a compact, stable status vocabulary.
+    const stopped = 'replied';
+    await env.DB.prepare(
+      `UPDATE campaign_leads SET status=?1,updated_at=datetime('now') WHERE campaign_id=?2 AND lead_id=?3`
+    ).bind(stopped, campaignMessage.campaign_id, lead.id).run();
+    await recordSequenceEvent(env, campaignMessage.campaign_id, lead.id, messageId, 'reply_received', { classification, sequence_stopped: true });
+  }
   await recordEvent(env.DB, lead.id, 'status_changed', { to: status, sales_stage: salesStage, by: 'reply_classification' });
 }
 
