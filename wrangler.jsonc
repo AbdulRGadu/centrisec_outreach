@@ -1,6 +1,7 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "centrisec-outreach",
+  "account_id": "c042400a63d2d3d81042613f4abef9c1",
   "main": "src/index.ts",
   "compatibility_date": "2026-07-16",
   "compatibility_flags": ["nodejs_compat"],
