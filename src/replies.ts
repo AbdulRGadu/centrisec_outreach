@@ -409,7 +409,7 @@ async function applyReplyOutcome(
     // campaign_leads deliberately keeps a compact, stable status vocabulary.
     const stopped = 'replied';
     await env.DB.prepare(
-      `UPDATE campaign_leads SET status=?1,updated_at=datetime('now') WHERE campaign_id=?2 AND lead_id=?3`
+      `UPDATE campaign_leads SET status=?1,status_reason='Sequence stopped: reply received',updated_at=datetime('now') WHERE campaign_id=?2 AND lead_id=?3`
     ).bind(stopped, campaignMessage.campaign_id, lead.id).run();
     await recordSequenceEvent(env, campaignMessage.campaign_id, lead.id, messageId, 'reply_received', { classification, sequence_stopped: true });
   }

@@ -63,6 +63,40 @@ export async function handleStats(env: Env): Promise<Response> {
     )
     .all<{ day: string; n: number }>();
 
+  const queue = await env.DB.prepare(
+    `SELECT COUNT(*) AS total,
+       SUM(CASE WHEN retry_at IS NOT NULL THEN 1 ELSE 0 END) AS retrying,
+       SUM(CASE WHEN scheduled_at IS NOT NULL AND scheduled_at <= datetime('now') THEN 1 ELSE 0 END) AS due
+     FROM messages WHERE direction='outbound' AND status='queued'`
+  ).first<{ total: number; retrying: number; due: number }>();
+  const blocked = await env.DB.prepare(
+    `SELECT COUNT(*) AS n FROM messages WHERE direction='outbound' AND (sendability_status='blocked' OR status IN ('failed','send_unknown'))`
+  ).first<{ n: number }>();
+  const repliesNeedingAction = await env.DB.prepare(
+    `SELECT COUNT(*) AS n FROM messages WHERE direction='inbound' AND status='received'
+       AND COALESCE(next_action,'manual_review') NOT IN ('no_action','auto_reply')`
+  ).first<{ n: number }>();
+  const campaigns = await env.DB.prepare(
+    `SELECT SUM(CASE WHEN status='active' THEN 1 ELSE 0 END) AS active,
+       SUM(CASE WHEN status='paused' THEN 1 ELSE 0 END) AS paused FROM campaigns`
+  ).first<{ active: number; paused: number }>();
+  const nextQueued = await env.DB.prepare(
+    `SELECT m.id, m.scheduled_at, m.status_reason, l.company AS lead_company, l.email AS lead_email
+       FROM messages m LEFT JOIN leads l ON l.id=m.lead_id
+      WHERE m.direction='outbound' AND m.status='queued'
+      ORDER BY CASE WHEN m.scheduled_at IS NULL THEN 1 ELSE 0 END, m.scheduled_at ASC LIMIT 1`
+  ).first<{ id: string; scheduled_at: string | null; status_reason: string | null; lead_company: string | null; lead_email: string | null }>();
+  const attentionRows = await env.DB.prepare(
+    `SELECT m.id, m.status, m.sendability_status, m.status_reason, m.error_code, m.error_detail,
+       m.retry_at, m.scheduled_at, m.next_action, l.company AS lead_company, l.email AS lead_email,
+       c.name AS campaign_name
+      FROM messages m LEFT JOIN leads l ON l.id=m.lead_id LEFT JOIN campaigns c ON c.id=m.campaign_id
+     WHERE m.direction='outbound' AND (
+       m.status IN ('needs_review','failed','send_unknown') OR
+       (m.status='queued' AND m.retry_at IS NOT NULL)
+     ) ORDER BY COALESCE(m.retry_at,m.updated_at) ASC LIMIT 20`
+  ).all();
+
   return jsonResponse({
     ok: true,
     pipeline,
@@ -72,5 +106,14 @@ export async function handleStats(env: Env): Promise<Response> {
     sendUnknown: sendUnknown?.n ?? 0,
     repliesLast7ByClass,
     sentLast7: sent7.results,
+    queue: { total: queue?.total ?? 0, retrying: queue?.retrying ?? 0, due: queue?.due ?? 0, next: nextQueued ?? null },
+    blocked: blocked?.n ?? 0,
+    repliesNeedingAction: repliesNeedingAction?.n ?? 0,
+    campaigns: { active: campaigns?.active ?? 0, paused: campaigns?.paused ?? 0 },
+    attention: attentionRows.results,
   });
+}
+
+export async function handleOverview(env: Env): Promise<Response> {
+  return handleStats(env);
 }

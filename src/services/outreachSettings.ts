@@ -10,6 +10,7 @@ export interface OutreachSettings {
   senderName: string;
   /** Optional Zoho-approved From address. Empty uses the deployed default. */
   senderEmail: string;
+  senderDisplayName: string;
   cta: string;
   footerHtml: string;
 }
@@ -20,6 +21,7 @@ export const DEFAULT_OUTREACH_SETTINGS: OutreachSettings = {
   signoff: 'Best regards',
   senderName: '',
   senderEmail: '',
+  senderDisplayName: 'Centrisec Ltd',
   cta: 'Would it be useful if I sent it over?',
   footerHtml: '',
 };
@@ -36,6 +38,7 @@ function clean(key: keyof OutreachSettings, value: unknown): string {
     return result.toLowerCase();
   }
   if (key === 'senderName' && result.toLowerCase() === 'centrisec team') return '';
+  if (key === 'senderDisplayName' && result.toLowerCase() === 'centrisec team') return DEFAULT_OUTREACH_SETTINGS.senderDisplayName;
   if (!result && key !== 'senderName') throw new HttpError(400, `${key} cannot be empty`);
   if (key === 'cta' && (result.match(/\?/g) ?? []).length > 1) {
     throw new HttpError(400, 'cta must contain only one question');
@@ -50,13 +53,32 @@ export async function getOutreachSettings(db: D1Database): Promise<OutreachSetti
   const values = new Map(rows.results.map((row) => [row.key, row.value]));
   return Object.fromEntries(KEYS.map((key) => {
     const value = values.get(`outreach_${key}`) ?? DEFAULT_OUTREACH_SETTINGS[key];
-    return [key, key === 'senderName' && value.trim().toLowerCase() === 'centrisec team' ? '' : value];
+    return [key,
+      key === 'senderName' && value.trim().toLowerCase() === 'centrisec team' ? ''
+        : key === 'senderDisplayName' && value.trim().toLowerCase() === 'centrisec team' ? DEFAULT_OUTREACH_SETTINGS.senderDisplayName
+          : value];
   })) as unknown as OutreachSettings;
 }
 
 /** Resolve the actual sender without exposing a deployment-only default in D1. */
 export function effectiveSenderEmail(settings: OutreachSettings, env: Pick<Env, 'FROM_EMAIL'>): string {
   return settings.senderEmail || env.FROM_EMAIL;
+}
+
+export function effectiveSenderDisplayName(
+  settings: Pick<OutreachSettings, 'senderDisplayName'>,
+  env: Pick<Env, 'FROM_NAME'>
+): string {
+  const configured = settings.senderDisplayName?.trim();
+  const deployed = env.FROM_NAME?.trim();
+  if (configured && configured.toLowerCase() !== 'centrisec team') return configured;
+  if (deployed && deployed.toLowerCase() !== 'centrisec team') return deployed;
+  return 'Centrisec Ltd';
+}
+
+export function safeSenderDisplayName(value: unknown, fallback = 'Centrisec Ltd'): string {
+  const result = typeof value === 'string' ? value.trim() : '';
+  return result && result.toLowerCase() !== 'centrisec team' ? result : fallback;
 }
 
 export async function updateOutreachSettings(body: Record<string, unknown>, db: D1Database): Promise<OutreachSettings> {
@@ -72,12 +94,12 @@ export async function updateOutreachSettings(body: Record<string, unknown>, db: 
   return next;
 }
 
-export async function handleOutreachSettingsGet(db: D1Database, env: Pick<Env, 'FROM_EMAIL'>): Promise<Response> {
+export async function handleOutreachSettingsGet(db: D1Database, env: Pick<Env, 'FROM_EMAIL' | 'FROM_NAME'>): Promise<Response> {
   const settings = await getOutreachSettings(db);
-  return jsonResponse({ ok: true, settings: { ...settings, senderEmail: effectiveSenderEmail(settings, env) } });
+  return jsonResponse({ ok: true, settings: { ...settings, senderEmail: effectiveSenderEmail(settings, env), senderDisplayName: effectiveSenderDisplayName(settings, env) } });
 }
 
-export async function handleOutreachSettingsPost(body: Record<string, unknown>, db: D1Database, env: Pick<Env, 'FROM_EMAIL'>): Promise<Response> {
+export async function handleOutreachSettingsPost(body: Record<string, unknown>, db: D1Database, env: Pick<Env, 'FROM_EMAIL' | 'FROM_NAME'>): Promise<Response> {
   const settings = await updateOutreachSettings(body, db);
-  return jsonResponse({ ok: true, settings: { ...settings, senderEmail: effectiveSenderEmail(settings, env) } });
+  return jsonResponse({ ok: true, settings: { ...settings, senderEmail: effectiveSenderEmail(settings, env), senderDisplayName: effectiveSenderDisplayName(settings, env) } });
 }

@@ -1,5 +1,5 @@
 import type { DraftPersonalizationPlan } from './personalization.ts';
-import type { LeadRow } from '../types';
+import type { LeadRow, QualityPolicy } from '../types';
 import { validateDraftQuality, type DraftQualityResult } from './draftQuality.ts';
 import { expectedGreeting, normalizeDraftSubject, renderDraftEmail } from './emailRenderer.ts';
 
@@ -82,13 +82,13 @@ export function buildSafeFallbackDraft(lead: LeadRow, plan: DraftPersonalization
   };
 }
 
-function assess(candidate: DraftCandidate, lead: LeadRow, plan: DraftPersonalizationPlan): DraftCandidate & { quality: DraftQualityResult } {
+function assess(candidate: DraftCandidate, lead: LeadRow, plan: DraftPersonalizationPlan, qualityPolicy: QualityPolicy): DraftCandidate & { quality: DraftQualityResult } {
   const subject = normalizeDraftSubject(candidate.subject ?? '');
   const body = renderDraftEmail(candidate.body ?? '', lead, plan.messaging);
   return {
     subject,
     body,
-    quality: validateDraftQuality(subject, body, lead, plan.strategy, candidate.body ?? '', plan.messaging),
+    quality: validateDraftQuality(subject, body, lead, plan.strategy, candidate.body ?? '', plan.messaging, qualityPolicy),
   };
 }
 
@@ -98,8 +98,10 @@ export async function improveDraftUntilSendable(args: {
   initialDraft: DraftCandidate;
   repair: DraftRepair;
   maxRepairAttempts?: number;
+  qualityPolicy?: QualityPolicy;
 }): Promise<DraftAutomationResult> {
-  let current = assess(args.initialDraft, args.lead, args.plan);
+  const qualityPolicy = args.qualityPolicy ?? 'balanced';
+  let current = assess(args.initialDraft, args.lead, args.plan, qualityPolicy);
   const initialWarnings = [...current.quality.warnings];
   const maxAttempts = Math.min(Math.max(args.maxRepairAttempts ?? 2, 0), 2);
   let attempts = 0;
@@ -113,14 +115,14 @@ export async function improveDraftUntilSendable(args: {
         warnings: current.quality.warnings,
         attempt: attempts,
       });
-      current = assess(repaired, args.lead, args.plan);
+      current = assess(repaired, args.lead, args.plan, qualityPolicy);
     } catch {
       failures++;
     }
   }
 
   if (!current.quality.valid) {
-    current = assess(buildSafeFallbackDraft(args.lead, args.plan), args.lead, args.plan);
+    current = assess(buildSafeFallbackDraft(args.lead, args.plan), args.lead, args.plan, qualityPolicy);
     return {
       ...current,
       initial_warnings: initialWarnings,

@@ -3,6 +3,7 @@ import { wordCount } from '../util/text.ts';
 import { expectedGreeting } from './emailRenderer.ts';
 import { leadShowsWarmIntent, type LeadSegmentationResult } from './leadSegmentation.ts';
 import { DEFAULT_OUTREACH_SETTINGS, type OutreachSettings } from './outreachSettings.ts';
+import type { QualityPolicy } from '../types.ts';
 
 export interface DraftQualityResult {
   valid: boolean;
@@ -55,7 +56,8 @@ export function validateDraftQuality(
   lead: LeadRow,
   strategy?: LeadSegmentationResult,
   sourceBody = body,
-  settings: OutreachSettings = DEFAULT_OUTREACH_SETTINGS
+  settings: OutreachSettings = DEFAULT_OUTREACH_SETTINGS,
+  qualityPolicy: QualityPolicy = 'strict'
 ): DraftQualityResult {
   const warnings: string[] = [];
   const normalized = body.replace(/\r\n?/g, '\n').trim();
@@ -69,6 +71,7 @@ export function validateDraftQuality(
 
   if (subject.trim().length < 3) warnings.push('Subject is too short.');
   if (wordCount(subject) > 8) warnings.push('Subject is longer than 8 words.');
+  if (normalized.length < 20) warnings.push('Body is shorter than 20 characters.');
   if (words < 80) warnings.push('Body is shorter than 80 words.');
   if (words > 140) warnings.push('Body exceeds the 140-word quality limit.');
   if (blocks.length !== 7) warnings.push('Body must contain exactly seven structured paragraphs including greeting and signoff.');
@@ -117,6 +120,12 @@ export function validateDraftQuality(
   }
 
   const uniqueWarnings = [...new Set(warnings)];
+  // Balanced and Custom policies keep copy-quality guidance visible without
+  // making a usable draft impossible to send. Safety and minimum technical
+  // requirements remain hard blocks in every policy.
+  const blockingWarnings = qualityPolicy === 'strict'
+    ? uniqueWarnings
+    : uniqueWarnings.filter((warning) => /Subject is too short|Body is shorter than 20|incorrectly described as the prospect|unverified vulnerability|unsubscribe|system footer|em dash|hype or fake urgency|Signoff is missing or duplicated/i.test(warning));
   const failed = (pattern: RegExp): boolean => uniqueWarnings.some((warning) => pattern.test(warning));
   const checks: DraftQualityCheck[] = [
     { id: 'subject', label: 'Clear subject of eight words or fewer', passed: !failed(/^Subject /) },
@@ -134,8 +143,8 @@ export function validateDraftQuality(
     },
   ];
   return {
-    valid: uniqueWarnings.length === 0,
-    status: uniqueWarnings.length === 0 ? 'passed' : 'needs_review',
+    valid: blockingWarnings.length === 0,
+    status: blockingWarnings.length === 0 ? 'passed' : 'needs_review',
     warnings: uniqueWarnings,
     word_count: words,
     question_count: questions,

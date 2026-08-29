@@ -33,6 +33,8 @@ export type MessageStatus =
   | 'send_unknown'
   | 'received';
 
+export type SendabilityStatus = 'sendable' | 'needs_review' | 'blocked';
+
 export type CampaignStatus = 'draft' | 'active' | 'paused' | 'archived' | 'completed';
 export type QualityPolicy = 'balanced' | 'strict' | 'custom';
 
@@ -52,6 +54,7 @@ export interface SenderProfileRow {
   footer_html: string;
   quality_policy: QualityPolicy;
   is_verified: number;
+  display_name_verified: number;
   is_active: number;
   created_at: string;
   updated_at: string;
@@ -85,6 +88,13 @@ export interface CampaignRow {
   sector_angle: string | null;
   initial_template: string | null;
   follow_up_template: string | null;
+  sender_profile_name?: string | null;
+  audience_count?: number;
+  sent_count?: number;
+  replied_count?: number;
+  queued_count?: number;
+  attention_count?: number;
+  next_scheduled_at?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -229,6 +239,16 @@ export interface MessageRow {
   settings_snapshot: string | null;
   quality_snapshot: string | null;
   scheduled_at: string | null;
+  sendability_status: SendabilityStatus;
+  status_reason: string | null;
+  error_code: string | null;
+  error_detail: string | null;
+  retry_at: string | null;
+  last_attempt_at: string | null;
+  sender_display_name: string | null;
+  provider_status: string | null;
+  stopped_at: string | null;
+  stopped_reason: string | null;
 }
 
 export type ReplyMatchStatus =

@@ -2,14 +2,28 @@ import type { Env } from './env';
 import { isDryRun } from './env';
 
 export type ZohoErrorKind = 'auth' | 'rate' | 'transient' | 'permanent';
+export type ZohoErrorCode =
+  | 'auth_failed'
+  | 'rate_limited'
+  | 'provider_unavailable'
+  | 'invalid_recipient'
+  | 'sender_not_verified'
+  | 'provider_rejected'
+  | 'unknown_provider_error';
 
 export class ZohoError extends Error {
   kind: ZohoErrorKind;
   status: number;
-  constructor(kind: ZohoErrorKind, status: number, message: string) {
+  code: ZohoErrorCode;
+  retryAfterSeconds: number | null;
+  providerDescription: string;
+  constructor(kind: ZohoErrorKind, status: number, message: string, code: ZohoErrorCode = 'unknown_provider_error', retryAfterSeconds: number | null = null, providerDescription = message) {
     super(message);
     this.kind = kind;
     this.status = status;
+    this.code = code;
+    this.retryAfterSeconds = retryAfterSeconds;
+    this.providerDescription = providerDescription;
   }
 }
 
@@ -43,7 +57,8 @@ async function refreshAccessToken(env: Env): Promise<CachedToken> {
     | { access_token?: string; expires_in?: number; error?: string }
     | null;
   if (!res.ok || !json?.access_token) {
-    throw new ZohoError('auth', res.status, `Zoho token refresh failed: ${json?.error ?? res.status}`);
+    const description = json?.error ?? `HTTP ${res.status}`;
+    throw new ZohoError('auth', res.status, `Zoho token refresh failed: ${description}`, 'auth_failed', null, description);
   }
   return {
     token: json.access_token,
@@ -88,6 +103,18 @@ function classifyStatus(status: number, zohoCode: string | number | undefined): 
   if (status === 429) return 'rate';
   if (status >= 500) return 'transient';
   return 'permanent';
+}
+
+function normalizeZohoCode(status: number, zohoCode: string | number | undefined, description: string): ZohoErrorCode {
+  const code = String(zohoCode ?? '').toLowerCase();
+  const text = `${code} ${description}`.toLowerCase();
+  if (status === 401 || text.includes('oauth') || text.includes('token')) return 'auth_failed';
+  if (status === 429 || text.includes('rate')) return 'rate_limited';
+  if (status >= 500 || text.includes('internal error') || text.includes('temporarily')) return 'provider_unavailable';
+  if (text.includes('recipient') || text.includes('invalid email') || text.includes('mail address')) return 'invalid_recipient';
+  if (text.includes('from') || text.includes('sender') || text.includes('permission') || text.includes('not allowed')) return 'sender_not_verified';
+  if (status >= 400) return 'provider_rejected';
+  return 'unknown_provider_error';
 }
 
 export interface SendMailResult {
@@ -149,7 +176,8 @@ export async function sendMail(
       body: JSON.stringify(buildSendMailPayload(env, args)),
     });
   } catch (err) {
-    throw new ZohoError('transient', 0, `Zoho network error: ${err instanceof Error ? err.message : String(err)}`);
+    const description = err instanceof Error ? err.message : String(err);
+    throw new ZohoError('transient', 0, 'Zoho is temporarily unreachable', 'provider_unavailable', null, description);
   }
 
   if (res.ok) {
@@ -163,10 +191,14 @@ export async function sendMail(
     };
   }
 
-  const json = (await res.json().catch(() => null)) as
-    | { status?: { code?: number | string; description?: string }; data?: { errorCode?: string } }
-    | null;
+  const raw = await res.text().catch(() => '');
+  type ZohoErrorResponse = { status?: { code?: number | string; description?: string }; data?: { errorCode?: string }; message?: string; error?: string };
+  let json: ZohoErrorResponse | null = null;
+  try { json = raw ? JSON.parse(raw) as ZohoErrorResponse : null; } catch { /* preserve raw provider response below */ }
   const zohoCode = json?.data?.errorCode ?? json?.status?.code;
-  const description = json?.status?.description ?? `HTTP ${res.status}`;
-  throw new ZohoError(classifyStatus(res.status, zohoCode), res.status, `Zoho send failed: ${description}`);
+  const description = json?.status?.description ?? json?.message ?? json?.error ?? (raw.trim().slice(0, 180) || `HTTP ${res.status}`);
+  const kind = classifyStatus(res.status, zohoCode);
+  const code = normalizeZohoCode(res.status, zohoCode, description);
+  const retryAfter = Number.parseInt(res.headers.get('Retry-After') ?? '', 10);
+  throw new ZohoError(kind, res.status, `Zoho send failed: ${description}`, code, Number.isFinite(retryAfter) ? retryAfter : null, description);
 }

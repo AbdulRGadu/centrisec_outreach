@@ -8,9 +8,9 @@ import { deliveryTestEnabled, priorOutboundBlocksDelivery } from './services/del
 import { validateDraftQuality } from './services/draftQuality';
 import { normalizeDraftSubject, renderDraftEmail } from './services/emailRenderer';
 import { buildPersonalizationPlan } from './services/personalization';
-import { getOutreachSettings } from './services/outreachSettings';
+import { DEFAULT_OUTREACH_SETTINGS, effectiveSenderDisplayName, getOutreachSettings, type OutreachSettings } from './services/outreachSettings';
 import { isSuppressed } from './suppression';
-import type { LeadRow, MessageRow } from './types';
+import type { LeadRow, MessageRow, QualityPolicy } from './types';
 
 export async function getMessage(env: Env, id: string): Promise<MessageRow> {
   const row = await env.DB.prepare('SELECT * FROM messages WHERE id = ?1').bind(id).first<MessageRow>();
@@ -50,6 +50,29 @@ export async function handleMessagesList(url: URL, env: Env): Promise<Response> 
   return jsonResponse({ ok: true, messages: rows.results });
 }
 
+function snapshotSettings(message: MessageRow, fallback: OutreachSettings): { settings: OutreachSettings; policy: QualityPolicy } {
+  try {
+    const parsed = message.settings_snapshot ? JSON.parse(message.settings_snapshot) as Record<string, unknown> : {};
+    const policy = parsed.qualityPolicy === 'strict' || parsed.qualityPolicy === 'custom' ? parsed.qualityPolicy : 'balanced';
+    return {
+      settings: {
+        ...fallback,
+        greeting: typeof parsed.greeting === 'string' ? parsed.greeting : fallback.greeting,
+        fallbackGreeting: typeof parsed.fallbackGreeting === 'string' ? parsed.fallbackGreeting : fallback.fallbackGreeting,
+        signoff: typeof parsed.signoff === 'string' ? parsed.signoff : fallback.signoff,
+        senderName: typeof parsed.senderName === 'string' ? parsed.senderName : fallback.senderName,
+        senderEmail: typeof parsed.senderEmail === 'string' ? parsed.senderEmail : fallback.senderEmail,
+        senderDisplayName: typeof parsed.senderDisplayName === 'string' ? parsed.senderDisplayName : fallback.senderDisplayName,
+        cta: typeof parsed.cta === 'string' ? parsed.cta : fallback.cta,
+        footerHtml: typeof parsed.footerHtml === 'string' ? parsed.footerHtml : fallback.footerHtml,
+      },
+      policy,
+    };
+  } catch {
+    return { settings: fallback, policy: 'balanced' };
+  }
+}
+
 export async function handleMessagePatch(id: string, body: Record<string, unknown>, env: Env): Promise<Response> {
   const message = await getMessage(env, id);
   if (message.direction !== 'outbound' || !['draft', 'needs_review'].includes(message.status)) {
@@ -57,7 +80,9 @@ export async function handleMessagePatch(id: string, body: Record<string, unknow
   }
   const subject = typeof body.subject === 'string' ? normalizeDraftSubject(normalizeText(body.subject, 150)) : null;
   const lead = message.lead_id ? await getLead(env, message.lead_id) : null;
-  const settings = lead ? await getOutreachSettings(env.DB) : null;
+  const globalSettings = lead ? await getOutreachSettings(env.DB) : null;
+  const snapshot = globalSettings ? snapshotSettings(message, globalSettings) : null;
+  const settings = snapshot?.settings ?? globalSettings ?? DEFAULT_OUTREACH_SETTINGS;
   const newBody = typeof body.body === 'string' && lead
     ? renderDraftEmail(normalizeMultiline(body.body, 5000), lead, settings ?? undefined)
     : typeof body.body === 'string' ? normalizeMultiline(body.body, 5000) : null;
@@ -67,7 +92,7 @@ export async function handleMessagePatch(id: string, body: Record<string, unknow
 
   const finalSubject = subject ?? message.subject ?? '';
   const finalBody = newBody ?? message.body ?? '';
-  const strategy = lead ? buildPersonalizationPlan(lead, settings ?? undefined).strategy : null;
+  const strategy = lead ? buildPersonalizationPlan(lead, settings).strategy : null;
   const quality = lead
     ? validateDraftQuality(
         finalSubject,
@@ -75,7 +100,8 @@ export async function handleMessagePatch(id: string, body: Record<string, unknow
         lead,
         strategy ?? undefined,
         typeof body.body === 'string' ? normalizeMultiline(body.body, 5000) : finalBody,
-        settings ?? undefined
+        settings,
+        snapshot?.policy ?? 'balanced'
       )
     : { valid: false, status: 'needs_review' as const, warnings: ['Draft has no lead.'], word_count: 0, question_count: 0, checks: [] };
   const nextStatus = quality.valid ? 'draft' : 'needs_review';
@@ -104,10 +130,13 @@ export async function handleMessagePatch(id: string, body: Record<string, unknow
          draft_quality_status = ?5,
          validation_warnings = ?6,
          next_step_plan = ?7,
+         sendability_status = ?8,
+         status_reason = ?9,
          updated_at = datetime('now')
-       WHERE id = ?8 AND status IN ('draft','needs_review')`
+       WHERE id = ?10 AND status IN ('draft','needs_review')`
     )
-    .bind(subject, newBody, nextStatus, warning, quality.status, JSON.stringify(quality.warnings), nextStepPlan, id)
+    .bind(subject, newBody, nextStatus, warning, quality.status, JSON.stringify(quality.warnings), nextStepPlan,
+      quality.valid ? 'sendable' : 'needs_review', quality.valid ? null : 'Draft quality checks need attention', id)
     .run();
   if (message.lead_id) {
     await recordEvent(env.DB, message.lead_id, 'draft_edited', { message_id: id });
@@ -139,14 +168,16 @@ async function assertEligibleToSend(env: Env, message: MessageRow): Promise<Lead
 }
 
 async function currentQuality(env: Env, message: MessageRow, lead: LeadRow) {
-  const settings = await getOutreachSettings(env.DB);
+  const fallback = await getOutreachSettings(env.DB);
+  const snapshot = snapshotSettings(message, fallback);
   return validateDraftQuality(
     message.subject ?? '',
     message.body ?? '',
     lead,
-    buildPersonalizationPlan(lead, settings).strategy,
+    buildPersonalizationPlan(lead, snapshot.settings).strategy,
     message.body ?? '',
-    settings
+    snapshot.settings,
+    snapshot.policy
   );
 }
 
@@ -185,7 +216,7 @@ export async function handleMessageApprove(id: string, env: Env): Promise<Respon
 
   const claim = await env.DB
     .prepare(
-      `UPDATE messages SET status = 'approved', updated_at = datetime('now')
+      `UPDATE messages SET status = 'approved', sendability_status = 'sendable', status_reason = 'Approved; waiting for queue delivery', updated_at = datetime('now')
        WHERE id = ?1 AND status IN ('draft','needs_review')`
     )
     .bind(id)
@@ -197,7 +228,7 @@ export async function handleMessageApprove(id: string, env: Env): Promise<Respon
   try {
     await env.SEND_QUEUE.send({ type: 'send', messageId: id });
     await env.DB
-      .prepare(`UPDATE messages SET status = 'queued', updated_at = datetime('now') WHERE id = ?1 AND status = 'approved'`)
+      .prepare(`UPDATE messages SET status = 'queued', sendability_status = 'sendable', status_reason = 'Queued for delivery', updated_at = datetime('now') WHERE id = ?1 AND status = 'approved'`)
       .bind(id)
       .run();
     queued = true;
@@ -250,9 +281,14 @@ export async function handleMessagesQueue(body: Record<string, unknown>, env: En
         const parsed = message.settings_snapshot ? JSON.parse(message.settings_snapshot) as unknown : null;
         if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) snapshot = parsed as Record<string, unknown>;
       } catch { /* Preserve delivery behavior with a fresh safe snapshot. */ }
+      if (!snapshot.senderDisplayName) {
+        const settings = await getOutreachSettings(env.DB);
+        snapshot.senderDisplayName = effectiveSenderDisplayName(settings, env);
+      }
       snapshot.batchDailyCap = dailyCap;
       const updated = await env.DB.prepare(
-        `UPDATE messages SET status='queued', scheduled_at=?1, settings_snapshot=?2, updated_at=datetime('now')
+        `UPDATE messages SET status='queued', scheduled_at=?1, settings_snapshot=?2, sendability_status='sendable',
+            status_reason='Scheduled for delivery', updated_at=datetime('now')
          WHERE id=?3 AND status IN ('draft','approved')`
       ).bind(scheduled, JSON.stringify(snapshot), id).run();
       if ((updated.meta.changes ?? 0) === 0) throw new HttpError(409, 'Message changed while being queued');
@@ -278,7 +314,7 @@ export async function handleMessageReject(id: string, body: Record<string, unkno
   const reason = normalizeText(body.reason, 300) || null;
   await env.DB
     .prepare(
-      `UPDATE messages SET status = 'rejected', error = ?1, updated_at = datetime('now')
+      `UPDATE messages SET status = 'rejected', sendability_status = 'blocked', status_reason = ?1, error = ?1, updated_at = datetime('now')
        WHERE id = ?2 AND status IN ('draft','needs_review')`
     )
     .bind(reason, id)
@@ -299,13 +335,76 @@ export async function handleMessageNeedsReview(id: string, env: Env): Promise<Re
     throw new HttpError(409, `Cannot mark a message in status '${message.status}' for review`);
   }
   await env.DB.prepare(
-    `UPDATE messages SET status = 'needs_review', draft_quality_status = 'needs_review',
-       error = 'Marked for manual review', updated_at = datetime('now') WHERE id = ?1`
+    `UPDATE messages SET status = 'needs_review', draft_quality_status = 'needs_review', sendability_status = 'needs_review',
+       status_reason = 'Marked for manual review', error = 'Marked for manual review', updated_at = datetime('now') WHERE id = ?1`
   ).bind(id).run();
   if (message.lead_id) {
     await recordEvent(env.DB, message.lead_id, 'draft_needs_review', { message_id: id, by: 'manual' });
   }
   return jsonResponse({ ok: true, message: await getMessage(env, id) });
+}
+
+export async function handleMessageCancel(id: string, env: Env): Promise<Response> {
+  const message = await getMessage(env, id);
+  if (!['approved', 'queued'].includes(message.status)) {
+    throw new HttpError(409, `Cannot cancel a message in status '${message.status}'`);
+  }
+  const result = await env.DB.prepare(
+    `UPDATE messages SET status='rejected', sendability_status='blocked', status_reason='Cancelled by operator',
+       stopped_at=datetime('now'), stopped_reason='operator_cancelled', next_action='stopped', updated_at=datetime('now')
+     WHERE id=?1 AND status IN ('approved','queued')`
+  ).bind(id).run();
+  if ((result.meta.changes ?? 0) === 0) throw new HttpError(409, 'Message changed before it could be cancelled');
+  if (message.lead_id) {
+    await env.DB.prepare(
+      `UPDATE leads SET status='manual_review', sales_stage='sequence_stopped', next_action='stopped_by_operator', updated_at=datetime('now')
+       WHERE id=?1 AND status='queued'`
+    ).bind(message.lead_id).run();
+    await recordEvent(env.DB, message.lead_id, 'send_cancelled', { message_id: id });
+  }
+  return jsonResponse({ ok: true, message: await getMessage(env, id) });
+}
+
+export async function handleMessageReschedule(id: string, body: Record<string, unknown>, env: Env): Promise<Response> {
+  const message = await getMessage(env, id);
+  if (message.status !== 'queued') throw new HttpError(409, `Cannot reschedule a message in status '${message.status}'`);
+  const scheduled = batchScheduleStart(body.scheduledAt).toISOString();
+  await env.DB.prepare(
+    `UPDATE messages SET scheduled_at=?1, status_reason='Rescheduled by operator', retry_at=NULL, updated_at=datetime('now')
+     WHERE id=?2 AND status='queued'`
+  ).bind(scheduled, id).run();
+  const delaySeconds = Math.min(Math.max(0, Math.ceil((new Date(scheduled).getTime() - Date.now()) / 1000)), 85_800);
+  try { await env.SEND_QUEUE.send({ type: 'send', messageId: id }, delaySeconds > 0 ? { delaySeconds } : undefined); } catch {
+    // The sweeper can recover the queued row if the queue call fails.
+  }
+  if (message.lead_id) await recordEvent(env.DB, message.lead_id, 'send_rescheduled', { message_id: id, scheduled_at: scheduled });
+  return jsonResponse({ ok: true, scheduledAt: scheduled, message: await getMessage(env, id) });
+}
+
+export async function handleMessageRetry(id: string, body: Record<string, unknown>, env: Env): Promise<Response> {
+  const message = await getMessage(env, id);
+  if (!['failed', 'send_unknown'].includes(message.status)) {
+    throw new HttpError(409, `Cannot retry a message in status '${message.status}'`);
+  }
+  if (message.status === 'send_unknown' && body.confirmUnknown !== true) {
+    throw new HttpError(409, 'This send outcome is unknown; confirm that Zoho did not deliver it before retrying');
+  }
+  const lead = await assertEligibleToSend(env, message);
+  const scheduled = batchScheduleStart(body.scheduledAt).toISOString();
+  const updated = await env.DB.prepare(
+    `UPDATE messages SET status='queued', sendability_status='sendable', status_reason='Retry queued by operator',
+       error=NULL, error_code=NULL, error_detail=NULL, retry_at=NULL, scheduled_at=?1, stopped_at=NULL, stopped_reason=NULL,
+       next_action='scheduled_send', updated_at=datetime('now')
+     WHERE id=?2 AND status IN ('failed','send_unknown')`
+  ).bind(scheduled, id).run();
+  if ((updated.meta.changes ?? 0) === 0) throw new HttpError(409, 'Message changed before it could be retried');
+  await env.DB.prepare(`UPDATE leads SET status='queued', sales_stage='approved_to_send', next_action='scheduled_send', updated_at=datetime('now') WHERE id=?1`).bind(lead.id).run();
+  const delaySeconds = Math.min(Math.max(0, Math.ceil((new Date(scheduled).getTime() - Date.now()) / 1000)), 85_800);
+  try { await env.SEND_QUEUE.send({ type: 'send', messageId: id }, delaySeconds > 0 ? { delaySeconds } : undefined); } catch {
+    // The sweeper will re-enqueue a queued row if the queue call fails.
+  }
+  await recordEvent(env.DB, lead.id, 'send_retry_queued', { message_id: id, scheduled_at: scheduled });
+  return jsonResponse({ ok: true, scheduledAt: scheduled, message: await getMessage(env, id) });
 }
 
 /**
@@ -342,7 +441,8 @@ export async function handleSendNow(id: string, env: Env): Promise<Response> {
   if (message.status !== 'queued') {
     const claim = await env.DB
       .prepare(
-        `UPDATE messages SET status = 'queued', updated_at = datetime('now')
+        `UPDATE messages SET status = 'queued', sendability_status = 'sendable',
+           status_reason = 'Queued for immediate delivery', updated_at = datetime('now')
          WHERE id = ?1 AND status IN ('draft','needs_review','approved')`
       )
       .bind(id)

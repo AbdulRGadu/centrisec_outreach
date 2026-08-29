@@ -7,8 +7,11 @@ import { HttpError, jsonResponse, readJson } from './http';
 import { getLead, handleLeadGet, handleLeadPatch, handleLeadsList, handleLeadsPost } from './leads';
 import {
   handleMessageApprove,
+  handleMessageCancel,
   handleMessageNeedsReview,
   handleMessagePatch,
+  handleMessageReschedule,
+  handleMessageRetry,
   handleMessagesQueue,
   handleMessageReject,
   handleMessagesList,
@@ -24,7 +27,7 @@ import {
 import { runScheduled } from './schedule';
 import { processSend } from './sending';
 import { ensureDraftingSchema } from './schema';
-import { handleStats } from './stats';
+import { handleOverview, handleStats } from './stats';
 import {
   handleCampaignGet,
   handleCampaignClone,
@@ -95,6 +98,9 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
     if (!id && method === 'POST') return handleMessagesQueue(await readJson(request), env);
     if (id && method === 'PATCH' && !action) return handleMessagePatch(id, await readJson(request), env);
     if (id && method === 'POST' && action === 'approve') return handleMessageApprove(id, env);
+    if (id && method === 'POST' && action === 'cancel') return handleMessageCancel(id, env);
+    if (id && method === 'POST' && action === 'reschedule') return handleMessageReschedule(id, await readJsonOptional(request), env);
+    if (id && method === 'POST' && action === 'retry') return handleMessageRetry(id, await readJsonOptional(request), env);
     if (id && method === 'POST' && action === 'needs-review') return handleMessageNeedsReview(id, env);
     if (id && method === 'POST' && action === 'reject') {
       return handleMessageReject(id, await readJsonOptional(request), env);
@@ -133,6 +139,7 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
   }
 
   if (resource === 'stats' && !id && method === 'GET') return handleStats(env);
+  if (resource === 'overview' && !id && method === 'GET') return handleOverview(env);
 
   if (resource === 'admin' && id === 'ai') {
     if (action === 'models' && method === 'GET') return handleAiModelsGet(env);

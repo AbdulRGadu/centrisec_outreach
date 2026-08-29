@@ -1,7 +1,7 @@
 import type { Env } from '../env.ts';
 import { HttpError, isValidEmail, jsonResponse, normalizeMultiline, normalizeText } from '../http.ts';
 import type { CampaignRow, LeadRow, QualityPolicy, SenderProfileRow } from '../types.ts';
-import { DEFAULT_OUTREACH_SETTINGS, getOutreachSettings, type OutreachSettings } from './outreachSettings.ts';
+import { DEFAULT_OUTREACH_SETTINGS, effectiveSenderDisplayName, getOutreachSettings, safeSenderDisplayName, type OutreachSettings } from './outreachSettings.ts';
 
 const QUALITY_POLICIES = new Set<QualityPolicy>(['balanced', 'strict', 'custom']);
 const CAMPAIGN_STATUSES = new Set<CampaignRow['status']>(['draft', 'active', 'paused', 'archived', 'completed']);
@@ -53,11 +53,11 @@ function sendDays(value: unknown, fallback = '1,2,3,4,5'): string {
 async function defaultProfile(env: Env): Promise<SenderProfileRow> {
   const settings = await getOutreachSettings(env.DB);
   return {
-    id: 'default-centrisec', name: 'Centrisec Shared Inbox', display_name: 'Centrisec', sender_email: env.FROM_EMAIL,
+    id: 'default-centrisec', name: 'Centrisec Shared Inbox', display_name: effectiveSenderDisplayName(settings, env), sender_email: env.FROM_EMAIL,
     reply_email: env.FROM_EMAIL, cc_email: env.OUTREACH_CC_EMAIL || null, bcc_email: null,
     greeting: settings.greeting, fallback_greeting: settings.fallbackGreeting, signoff: settings.signoff, sender_name: settings.senderName || null,
     cta: settings.cta, footer_html: settings.footerHtml, quality_policy: 'balanced',
-    is_verified: 1, is_active: 1, created_at: '', updated_at: '',
+    is_verified: 1, display_name_verified: 0, is_active: 1, created_at: '', updated_at: '',
   };
 }
 
@@ -68,11 +68,11 @@ export async function ensureDefaultSenderProfile(env: Env): Promise<SenderProfil
   await env.DB.prepare(
     `INSERT OR IGNORE INTO sender_profiles (
       id, name, display_name, sender_email, reply_email, cc_email, greeting, fallback_greeting,
-      signoff, sender_name, cta, footer_html, quality_policy, is_verified, is_active
-    ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)`
+      signoff, sender_name, cta, footer_html, quality_policy, is_verified, display_name_verified, is_active
+    ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)`
   ).bind(profile.id, profile.name, profile.display_name, profile.sender_email, profile.reply_email, profile.cc_email,
     profile.greeting, profile.fallback_greeting, profile.signoff, profile.sender_name, profile.cta,
-    profile.footer_html, profile.quality_policy, profile.is_verified, profile.is_active).run();
+    profile.footer_html, profile.quality_policy, profile.is_verified, profile.display_name_verified, profile.is_active).run();
   return (await env.DB.prepare('SELECT * FROM sender_profiles WHERE id = ?1').bind(profile.id).first<SenderProfileRow>()) ?? profile;
 }
 
@@ -83,6 +83,7 @@ export function senderProfileSettings(profile: SenderProfileRow, campaign?: Camp
     signoff: profile.signoff,
     senderName: profile.sender_name ?? '',
     senderEmail: profile.sender_email,
+    senderDisplayName: safeSenderDisplayName(profile.display_name),
     cta: campaign?.cta || profile.cta,
     footerHtml: profile.footer_html,
   };
@@ -123,11 +124,11 @@ export async function handleSenderProfilePost(body: Record<string, unknown>, env
   await env.DB.prepare(
     `INSERT INTO sender_profiles (
       id,name,display_name,sender_email,reply_email,cc_email,bcc_email,greeting,fallback_greeting,
-      signoff,sender_name,cta,footer_html,quality_policy,is_verified,is_active
-    ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)`
+      signoff,sender_name,cta,footer_html,quality_policy,is_verified,display_name_verified,is_active
+    ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)`
   ).bind(profile.id, profile.name, profile.displayName, profile.senderEmail, profile.replyEmail, profile.ccEmail,
     profile.bccEmail, profile.greeting, profile.fallbackGreeting, profile.signoff, profile.senderName, profile.cta,
-    profile.footerHtml, profile.qualityPolicy, verified, verified).run();
+    profile.footerHtml, profile.qualityPolicy, verified, 0, verified).run();
   return jsonResponse({ ok: true, profile: await getSenderProfile(env, profile.id) }, 201);
 }
 
@@ -140,7 +141,7 @@ export async function handleSenderProfilePatch(id: string, body: Record<string, 
   await env.DB.prepare(
     `UPDATE sender_profiles SET name=?1, display_name=?2, sender_email=?3, reply_email=?4, cc_email=?5, bcc_email=?6,
       greeting=?7, fallback_greeting=?8, signoff=?9, sender_name=?10, cta=?11, footer_html=?12, quality_policy=?13,
-      is_verified=?14, is_active=?15, updated_at=datetime('now') WHERE id=?16`
+      is_verified=?14, display_name_verified=?15, is_active=?16, updated_at=datetime('now') WHERE id=?17`
   ).bind(
     normalizeText(body.name ?? current.name, 100), normalizeText(body.displayName ?? current.display_name, 100) || null, senderEmail,
     replyEmail, email(body.ccEmail ?? current.cc_email, 'ccEmail', true),
@@ -148,6 +149,7 @@ export async function handleSenderProfilePatch(id: string, body: Record<string, 
     normalizeText(body.fallbackGreeting ?? current.fallback_greeting, 40) || 'Hello', normalizeText(body.signoff ?? current.signoff, 80) || 'Best regards',
     normalizeText(body.senderName ?? current.sender_name, 80) || null, normalizeText(body.cta ?? current.cta, 220) || DEFAULT_OUTREACH_SETTINGS.cta,
     normalizeMultiline(body.footerHtml ?? current.footer_html, 10_000), policy(body.qualityPolicy ?? current.quality_policy), verified,
+    body.displayNameVerified === undefined ? current.display_name_verified : bool(body.displayNameVerified, false),
     body.isActive === undefined ? current.is_active : bool(body.isActive, true), id
   ).run();
   return jsonResponse({ ok: true, profile: await getSenderProfile(env, id) });
@@ -175,7 +177,10 @@ export async function handleCampaignsList(env: Env): Promise<Response> {
     `SELECT c.*, p.name AS sender_profile_name,
       COUNT(cl.lead_id) AS audience_count,
       SUM(CASE WHEN cl.status = 'sent' THEN 1 ELSE 0 END) AS sent_count,
-      SUM(CASE WHEN cl.status = 'replied' THEN 1 ELSE 0 END) AS replied_count
+      SUM(CASE WHEN cl.status = 'replied' THEN 1 ELSE 0 END) AS replied_count,
+      (SELECT COUNT(*) FROM messages m WHERE m.campaign_id = c.id AND m.direction='outbound' AND m.status='queued') AS queued_count,
+      (SELECT COUNT(*) FROM messages m WHERE m.campaign_id = c.id AND m.direction='outbound' AND m.status IN ('needs_review','failed','send_unknown')) AS attention_count,
+      (SELECT MIN(m.scheduled_at) FROM messages m WHERE m.campaign_id = c.id AND m.direction='outbound' AND m.status='queued') AS next_scheduled_at
      FROM campaigns c LEFT JOIN sender_profiles p ON p.id=c.sender_profile_id
      LEFT JOIN campaign_leads cl ON cl.campaign_id=c.id GROUP BY c.id ORDER BY c.updated_at DESC`
   ).all();
@@ -242,24 +247,33 @@ export async function handleCampaignClone(id: string, env: Env): Promise<Respons
 
 export async function handleCampaignStopUnsent(id: string, env: Env): Promise<Response> {
   await getCampaign(env, id);
+  const pending = await env.DB.prepare(
+    `SELECT id, lead_id FROM messages WHERE campaign_id=?1 AND direction='outbound' AND status IN ('draft','needs_review','approved','queued')`
+  ).bind(id).all<{ id: string; lead_id: string | null }>();
   const stopped = await env.DB.prepare(
-    `UPDATE messages SET status='rejected', error='Campaign stopped all unsent messages', updated_at=datetime('now')
+    `UPDATE messages SET status='rejected', sendability_status='blocked', status_reason='Campaign stopped this unsent message',
+       stopped_at=datetime('now'), stopped_reason='campaign_stopped', next_action='stopped',
+       error='Campaign stopped all unsent messages', updated_at=datetime('now')
      WHERE campaign_id=?1 AND direction='outbound' AND status IN ('draft','needs_review','approved','queued')`
   ).bind(id).run();
   await env.DB.prepare(`UPDATE campaigns SET status='paused',updated_at=datetime('now') WHERE id=?1`).bind(id).run();
-  await env.DB.prepare(`UPDATE campaign_leads SET status='paused',updated_at=datetime('now') WHERE campaign_id=?1 AND status IN ('eligible','queued')`).bind(id).run();
+  await env.DB.prepare(`UPDATE campaign_leads SET status='paused',status_reason='Campaign stopped by operator',updated_at=datetime('now') WHERE campaign_id=?1 AND status IN ('eligible','queued')`).bind(id).run();
+  for (const message of pending.results) {
+    if (message.lead_id) await recordSequenceEvent(env, id, message.lead_id, message.id, 'send_cancelled', { reason: 'campaign_stopped' });
+  }
   return jsonResponse({ ok: true, stopped: stopped.meta.changes ?? 0 });
 }
 
 export async function handleCampaignGet(id: string, env: Env): Promise<Response> {
   const campaign = await getCampaign(env,id);
-  const [profile, audience, events, funnel] = await Promise.all([
+  const [profile, audience, events, funnel, queueSummary] = await Promise.all([
     campaign.sender_profile_id ? getSenderProfile(env,campaign.sender_profile_id) : null,
     env.DB.prepare(`SELECT l.*, cl.status AS campaign_status, cl.added_at AS campaign_added_at FROM campaign_leads cl JOIN leads l ON l.id=cl.lead_id WHERE cl.campaign_id=?1 ORDER BY cl.added_at DESC LIMIT 200`).bind(id).all(),
     env.DB.prepare(`SELECT * FROM sequence_events WHERE campaign_id=?1 ORDER BY created_at DESC LIMIT 100`).bind(id).all(),
     env.DB.prepare(`SELECT status, COUNT(*) AS count FROM campaign_leads WHERE campaign_id=?1 GROUP BY status`).bind(id).all<{status:string;count:number}>(),
+    env.DB.prepare(`SELECT COUNT(*) AS queued_count, MIN(scheduled_at) AS next_scheduled_at FROM messages WHERE campaign_id=?1 AND direction='outbound' AND status='queued'`).bind(id).first<{queued_count:number;next_scheduled_at:string|null}>(),
   ]);
-  return jsonResponse({ ok:true,campaign,profile,audience:audience.results,events:events.results,funnel:Object.fromEntries(funnel.results.map((r)=>[r.status,r.count])) });
+  return jsonResponse({ ok:true,campaign:{ ...campaign, queued_count: queueSummary?.queued_count ?? 0, next_scheduled_at: queueSummary?.next_scheduled_at ?? null },profile,audience:audience.results,events:events.results,funnel:Object.fromEntries(funnel.results.map((r)=>[r.status,r.count])) });
 }
 
 export async function handleCampaignLeadPost(id: string, body: Record<string, unknown>, env: Env): Promise<Response> {

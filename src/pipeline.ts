@@ -11,7 +11,7 @@ import { deliveryTestEnabled, priorOutboundBlocksDelivery } from './services/del
 import { segmentLeadRow } from './services/leadSegmentation';
 import { planInitialNextStep } from './services/nextStepPlanner';
 import { buildPersonalizationPlan } from './services/personalization';
-import { effectiveSenderEmail, getOutreachSettings } from './services/outreachSettings';
+import { effectiveSenderDisplayName, effectiveSenderEmail, getOutreachSettings, safeSenderDisplayName } from './services/outreachSettings';
 import { activeCampaignForLead, recordSequenceEvent, renderCampaignTemplate, senderProfileSettings } from './services/campaigns';
 import { compatibleLeadSegment } from './schema';
 import { isSuppressed } from './suppression';
@@ -125,6 +125,7 @@ export async function draftLead(env: Env, lead: LeadRow, opts?: { force?: boolea
   const automation = await improveDraftUntilSendable({
     lead,
     plan,
+    qualityPolicy: campaignContext?.campaign.quality_policy ?? 'balanced',
     initialDraft,
     repair: async ({ failedDraft, warnings, attempt }) => {
       const corrective = buildDraftRepairMessages({
@@ -162,10 +163,10 @@ export async function draftLead(env: Env, lead: LeadRow, opts?: { force?: boolea
          ai_model, prompt_version, error, next_action, buyer_persona, security_context,
          recommended_offer, recommended_cta, draft_quality_status,
          validation_warnings, next_step_plan, campaign_id, sender_profile_id, sequence_step,
-         settings_snapshot, quality_snapshot
+         settings_snapshot, quality_snapshot, sendability_status, sender_display_name, status_reason
        ) VALUES (
          ?1, ?2, 'outbound', ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12,
-         ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, 1, ?21, ?22
+         ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, 1, ?21, ?22, ?23, ?24, NULL
        )`
     )
     .bind(
@@ -194,11 +195,19 @@ export async function draftLead(env: Env, lead: LeadRow, opts?: { force?: boolea
         replyEmail: campaignContext?.profile.reply_email ?? effectiveSenderEmail(outreachSettings, env),
         ccEmail: campaignContext?.profile.cc_email ?? env.OUTREACH_CC_EMAIL,
         bccEmail: campaignContext?.profile.bcc_email ?? null,
-        footerHtml: outreachSettings.footerHtml,
+        greeting: outreachSettings.greeting,
+        fallbackGreeting: outreachSettings.fallbackGreeting,
+        signoff: outreachSettings.signoff,
+        senderName: outreachSettings.senderName,
+        senderDisplayName: safeSenderDisplayName(campaignContext?.profile.display_name, effectiveSenderDisplayName(outreachSettings, env)),
+        cta: outreachSettings.cta,
+        footerHtml: campaignContext?.profile.footer_html ?? outreachSettings.footerHtml,
         campaignId: campaignContext?.campaign.id ?? null,
-        qualityPolicy: campaignContext?.campaign.quality_policy ?? 'strict',
+        qualityPolicy: campaignContext?.campaign.quality_policy ?? 'balanced',
       }),
       JSON.stringify({ status: quality.status, valid: quality.valid, warnings: quality.warnings, checks: quality.checks })
+      , quality.valid ? 'sendable' : 'needs_review'
+      , safeSenderDisplayName(campaignContext?.profile.display_name, effectiveSenderDisplayName(outreachSettings, env))
     )
     .run();
   await env.DB
@@ -224,7 +233,7 @@ export async function draftLead(env: Env, lead: LeadRow, opts?: { force?: boolea
   });
   await recordSequenceEvent(env, campaignContext?.campaign.id ?? null, lead.id, id, 'draft_created', {
     quality: quality.status,
-    policy: campaignContext?.campaign.quality_policy ?? 'strict',
+    policy: campaignContext?.campaign.quality_policy ?? 'balanced',
   });
   if (campaignContext?.campaign.status === 'active' && campaignContext.campaign.auto_send === 1 && quality.valid) {
     try {
@@ -236,14 +245,14 @@ export async function draftLead(env: Env, lead: LeadRow, opts?: { force?: boolea
         nextCampaignStart(campaignContext.campaign.timezone, campaignContext.campaign.send_start_time).getTime()
         + (ahead?.n ?? 0) * campaignContext.campaign.send_interval_minutes * 60_000
       ).toISOString();
-      await env.DB.prepare(`UPDATE messages SET status = 'queued', scheduled_at = ?1, updated_at = datetime('now') WHERE id = ?2 AND status = 'draft'`).bind(scheduledAt, id).run();
+      await env.DB.prepare(`UPDATE messages SET status = 'queued', scheduled_at = ?1, sendability_status='sendable', status_reason='Scheduled by campaign automation', updated_at = datetime('now') WHERE id = ?2 AND status = 'draft'`).bind(scheduledAt, id).run();
       const delaySeconds = Math.min(Math.max(0, Math.ceil((new Date(scheduledAt).getTime() - Date.now()) / 1000)), 85_800);
       await env.SEND_QUEUE.send({ type: 'send', messageId: id }, delaySeconds > 0 ? { delaySeconds } : undefined);
-      await env.DB.prepare(`UPDATE campaign_leads SET status = 'queued', updated_at = datetime('now') WHERE campaign_id = ?1 AND lead_id = ?2`).bind(campaignContext.campaign.id, lead.id).run();
+      await env.DB.prepare(`UPDATE campaign_leads SET status = 'queued', status_reason='Scheduled by campaign automation', updated_at = datetime('now') WHERE campaign_id = ?1 AND lead_id = ?2`).bind(campaignContext.campaign.id, lead.id).run();
       await env.DB.prepare(`UPDATE leads SET status = 'queued', sales_stage = 'approved_to_send', next_action = 'campaign_auto_send', updated_at = datetime('now') WHERE id = ?1`).bind(lead.id).run();
       await recordSequenceEvent(env, campaignContext.campaign.id, lead.id, id, 'auto_queued', { scheduled_at: scheduledAt });
     } catch {
-      await env.DB.prepare(`UPDATE messages SET status = 'approved', updated_at = datetime('now') WHERE id = ?1 AND status = 'draft'`).bind(id).run();
+      await env.DB.prepare(`UPDATE messages SET status = 'approved', sendability_status='sendable', status_reason='Approved; waiting for queue recovery', updated_at = datetime('now') WHERE id = ?1 AND status = 'draft'`).bind(id).run();
       await recordSequenceEvent(env, campaignContext.campaign.id, lead.id, id, 'queue_pending');
     }
   }
@@ -259,12 +268,20 @@ export async function autoRepairStoredDraft(
   lead: LeadRow
 ): Promise<{ message: MessageRow; automation: DraftAutomationResult }> {
   const plan = buildPersonalizationPlan(lead, await getOutreachSettings(env.DB));
+  let qualityPolicy: 'balanced' | 'strict' | 'custom' = 'balanced';
+  try {
+    const snapshot = message.settings_snapshot ? JSON.parse(message.settings_snapshot) as Record<string, unknown> : {};
+    if (snapshot.qualityPolicy === 'strict' || snapshot.qualityPolicy === 'custom') qualityPolicy = snapshot.qualityPolicy;
+  } catch {
+    // Legacy drafts without a policy use Balanced.
+  }
   const nextStepPlan = planInitialNextStep(plan.strategy);
   const baseMessages = buildDraftMessages(plan);
   const model = await activeAiModel(env);
   const automation = await improveDraftUntilSendable({
     lead,
     plan,
+    qualityPolicy,
     initialDraft: { subject: message.subject ?? '', body: message.body ?? '' },
     repair: async ({ failedDraft, warnings, attempt }) => {
       const corrective = buildDraftRepairMessages({
@@ -287,8 +304,9 @@ export async function autoRepairStoredDraft(
        status = ?1, subject = ?2, body = ?3, ai_model = ?4, prompt_version = ?5,
        error = ?6, next_action = ?7, buyer_persona = ?8, security_context = ?9,
        recommended_offer = ?10, recommended_cta = ?11, draft_quality_status = ?12,
-       validation_warnings = ?13, next_step_plan = ?14, updated_at = datetime('now')
-     WHERE id = ?15 AND status IN ('draft','needs_review')`
+       validation_warnings = ?13, next_step_plan = ?14, sendability_status = ?15,
+       status_reason = ?16, updated_at = datetime('now')
+     WHERE id = ?17 AND status IN ('draft','needs_review')`
   ).bind(
     status,
     automation.subject,
@@ -304,6 +322,8 @@ export async function autoRepairStoredDraft(
     automation.quality.status,
     JSON.stringify(automation.quality.warnings),
     JSON.stringify(nextStepWithQuality(nextStepPlan, automation)),
+    automation.quality.valid ? 'sendable' : 'needs_review',
+    automation.quality.valid ? null : 'Draft quality checks still need attention',
     message.id
   ).run();
   if ((update.meta.changes ?? 0) === 0) {

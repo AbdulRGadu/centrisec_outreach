@@ -107,6 +107,15 @@
   #toast.bad { border-color: var(--bad); }
   #toast.show { opacity: 1; }
   .empty { color: var(--muted); text-align: center; padding: 32px 0; }
+  .metric-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-bottom: 14px; }
+  .metric { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 13px 15px; }
+  .metric b { display: block; font-size: 23px; line-height: 1.1; margin-top: 3px; }
+  .metric.alert { border-color: var(--warn); }
+  .action-cell { display: flex; gap: 6px; flex-wrap: wrap; }
+  .reason { color: var(--muted); max-width: 360px; }
+  .status-banner { border: 1px solid var(--line); border-radius: 10px; padding: 9px 12px; margin-bottom: 10px; }
+  .status-banner.warn { border-color: var(--warn); background: rgba(245,158,11,.08); }
+  .status-banner.good { border-color: var(--accent); background: rgba(16,185,129,.08); }
   .feedback { min-height: 21px; margin: 8px 0 0; color: var(--info); }
   .feedback.success { color: var(--accent-2); }
   .feedback.bad, .warning { color: var(--warn); }
@@ -124,6 +133,8 @@
     main { padding-inline: 14px; }
     .review-grid { grid-template-columns: 1fr; }
     .strategy-panel { border-left: 0; border-top: 1px solid var(--line); padding: 14px 0 0; }
+    .metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    th, td { padding: 8px; }
   }
 </style>
 </head>
@@ -160,6 +171,8 @@
   </header>
   <main>
     <section id="tab-pipeline">
+      <div id="overview-summary" class="metric-grid" aria-live="polite"></div>
+      <div id="overview-attention"></div>
       <div class="toolbar">
         <select id="f-status">
           <option value="">All statuses</option>
@@ -306,6 +319,7 @@
           <label>Signoff<input id="outreach-signoff" placeholder="Best regards"></label>
           <label>Optional sender line<input id="outreach-sender-name" placeholder="Leave empty to use only the HTML footer"></label>
           <label style="grid-column:1/-1">Sender email<input id="outreach-sender-email" type="email" placeholder="info@centrisec.com" autocomplete="email"></label>
+          <label style="grid-column:1/-1">Sender display name<input id="outreach-sender-display" placeholder="Centrisec Ltd" autocomplete="organization"></label>
           <label style="grid-column:1/-1">CTA style<select id="outreach-cta-mode"><option value="auto">Generate based on industry and role</option><option value="checklist">Ask to send a checklist</option><option value="demo">Suggest a 15-minute product demo</option><option value="proposal">Ask to send a proposal</option><option value="custom">Use custom CTA</option></select></label>
           <label id="outreach-custom-cta-wrap" style="grid-column:1/-1">Custom CTA question<textarea id="outreach-cta" rows="2" placeholder="Can we schedule a 15-minute demo of the product?"></textarea></label>
           <label style="grid-column:1/-1">HTML footer (optional)<textarea id="outreach-footer-html" rows="6" placeholder="Leave empty to send no HTML footer"></textarea></label>
@@ -319,7 +333,7 @@
         <div id="profile-editor" class="hidden" style="margin-top:12px">
           <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px">
             <label>Name<input id="profile-name" placeholder="Centrisec Sales" style="width:100%"></label>
-            <label>Display name<input id="profile-display" placeholder="Centrisec" style="width:100%"></label>
+            <label>Display name<input id="profile-display" placeholder="Centrisec Ltd" style="width:100%"></label>
             <label>Zoho-approved sender / reply inbox<input id="profile-sender" type="email" placeholder="info@centrisec.com" style="width:100%"></label>
             <label>Internal CC<input id="profile-cc" type="email" placeholder="Optional" style="width:100%"></label>
             <label>Internal BCC<input id="profile-bcc" type="email" placeholder="Optional" style="width:100%"></label>
@@ -331,7 +345,7 @@
           </div>
           <label style="display:block;margin-top:10px">HTML footer<textarea id="profile-footer" rows="5"></textarea></label>
           <iframe id="profile-footer-preview" class="signature-frame" sandbox="" title="Sender profile footer preview"></iframe>
-          <div class="row" style="margin-top:10px"><label><input id="profile-confirm-zoho" type="checkbox"> I confirm this alternate sender is Zoho-approved</label><button id="profile-save" class="primary">Save profile</button><button id="profile-cancel">Cancel</button><span id="profile-feedback" class="feedback"></span></div>
+          <div class="row" style="margin-top:10px"><label><input id="profile-confirm-zoho" type="checkbox"> I confirm this alternate sender is Zoho-approved</label><label><input id="profile-confirm-display" type="checkbox"> Display name matches Zoho Send Mail As</label><button id="profile-save" class="primary">Save profile</button><button id="profile-cancel">Cancel</button><span id="profile-feedback" class="feedback"></span></div>
         </div>
         <div id="profile-list" style="margin-top:12px"></div>
       </div>
@@ -340,7 +354,15 @@
     <section id="tab-queue" class="hidden">
       <div class="toolbar">
         <div class="grow"><b>Send queue</b><div class="muted small">Messages are paced one every two minutes from the selected start time. A campaign’s caps and sending window still apply.</div></div>
+        <select id="queue-filter-state" aria-label="Queue status"><option value="queued">Queued</option><option value="failed">Failed</option><option value="send_unknown">Unknown outcome</option><option value="all">All delivery issues</option></select>
+        <input id="queue-filter-q" placeholder="Filter company or email" aria-label="Filter queue">
         <button id="queue-refresh">Refresh</button>
+      </div>
+      <div id="queue-actions" class="toolbar hidden">
+        <span id="queue-selection-status" class="muted small">0 selected</span>
+        <button id="queue-select-visible">Select visible</button>
+        <button id="queue-clear-selection">Clear</button>
+        <button id="queue-cancel-selected" class="danger">Cancel selected</button>
       </div>
       <div id="queue-list"></div>
     </section>
@@ -428,6 +450,8 @@ const state = {
   campaignEditing: null,
   profileEditing: null,
   leadSelection: new Set(),
+  queueMessages: [],
+  queueSelection: new Set(),
 };
 
 const $ = (sel) => document.querySelector(sel);
@@ -664,6 +688,8 @@ async function openLead(id) {
           el('span', { class: 'muted small', style: 'margin-left:auto' }, fmtDate(m.created_at))),
         m.subject ? el('div', { class: 'small', style: 'margin-top:4px' }, el('b', {}, m.subject)) : null,
         el('details', {}, el('summary', { class: 'muted small' }, 'Body'), el('pre', {}, m.body || '')),
+        m.sender_display_name ? el('div', { class: 'muted small' }, 'From: ' + m.sender_display_name + (m.from_email ? ' <' + m.from_email + '>' : '')) : null,
+        m.status_reason ? el('div', { class: 'muted small' }, 'Next: ' + m.status_reason) : null,
         ['draft','needs_review'].includes(m.status) ? el('div', { class: 'row', style: 'margin-top:6px' },
           el('button', { class: 'primary', onclick: () => { closeLayer('drawer'); openDraft(m.id); } }, 'Review draft')) : null,
         m.error ? el('div', { class: 'small', style: 'color:var(--bad);margin-top:4px' }, m.error) : null))),
@@ -819,6 +845,47 @@ async function loadDrafts() {
   }));
 }
 
+async function loadPipeline() {
+  await Promise.all([loadOverview(), loadLeads()]);
+}
+
+async function loadOverview() {
+  const overview = await api('/overview');
+  const remaining = Math.max(0, (overview.dailyCap || 0) - (overview.sendsToday || 0));
+  const metrics = [
+    ['Today', `${overview.sendsToday || 0} / ${overview.dailyCap || 0}`, `${remaining} remaining`, remaining === 0],
+    ['Queue', overview.queue?.total || 0, overview.queue?.next ? 'Next ' + fmtDate(overview.queue.next.scheduled_at) : 'Nothing scheduled', false],
+    ['Attention', (overview.draftsAwaiting || 0) + (overview.blocked || 0) + (overview.sendUnknown || 0), 'Drafts, failures, or unknown sends', (overview.blocked || 0) > 0 || (overview.sendUnknown || 0) > 0],
+    ['Replies', overview.repliesNeedingAction || 0, 'Need a human next step', (overview.repliesNeedingAction || 0) > 0],
+  ];
+  $('#overview-summary').replaceChildren(...metrics.map(([label, value, hint, alert]) => el('div', { class: 'metric' + (alert ? ' alert' : '') }, el('div', { class: 'muted small' }, label), el('b', {}, String(value)), el('div', { class: 'muted small' }, hint))));
+  const attention = overview.attention || [];
+  const target = $('#overview-attention');
+  if (!attention.length) {
+    target.replaceChildren(el('div', { class: 'status-banner good' }, 'Everything is moving cleanly. No blocked or retrying messages need attention.'));
+  } else {
+    const rows = attention.map((item) => el('tr', {},
+      el('td', {}, item.lead_company || item.lead_email || 'Unknown'),
+      el('td', {}, chip(item.status, 'st-')),
+      el('td', { class: 'reason' }, item.status_reason || item.error_detail || 'Review required'),
+      el('td', { class: 'small' }, item.next_action || 'manual_review'),
+      el('td', { class: 'action-cell' }, ['draft', 'needs_review'].includes(item.status)
+        ? el('button', { onclick: () => openDraft(item.id) }, 'Open draft')
+        : el('button', { onclick: () => switchTab('queue') }, 'Open queue'))
+    ));
+    const table = el('div', { class: 'table-wrap', style: 'margin-top:8px' },
+      el('table', {},
+        el('thead', {}, el('tr', {}, el('th', {}, 'Recipient'), el('th', {}, 'Status'), el('th', {}, 'Why'), el('th', {}, 'Next action'), el('th', {}))),
+        el('tbody', {}, ...rows)
+      )
+    );
+    target.replaceChildren(el('div', { class: 'card' },
+      el('div', { class: 'row' }, el('b', { class: 'grow' }, 'Needs attention'), el('span', { class: 'muted small' }, attention.length + ' item(s)')),
+      table
+    ));
+  }
+}
+
 function localDateTimeInputValue(date) {
   const pad = (value) => String(value).padStart(2, '0');
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
@@ -844,24 +911,40 @@ async function loadSent() {
       message.campaign_id ? chip('campaign', 'seg-') : chip('legacy', 'seg-'),
       el('span', { class: 'muted small' }, 'Sent ' + fmtDate(message.sent_at))),
     el('div', { class: 'muted small' }, 'To: ' + (message.to_email || '') + (message.lead_role ? ' · ' + message.lead_role : '')),
+    el('div', { class: 'muted small' }, 'From: ' + (message.sender_display_name || 'Centrisec Ltd') + (message.from_email ? ' <' + message.from_email + '>' : '')),
     el('div', { style: 'margin-top:6px' }, el('b', {}, message.subject || '(no subject)')),
     el('details', { style: 'margin-top:6px' }, el('summary', { class: 'muted small' }, 'View email'), el('pre', {}, message.body || '')),
+    message.status_reason ? el('p', { class: 'muted small' }, message.status_reason) : null,
     message.error ? el('p', { class: 'warning small' }, message.error) : null
   )));
 }
 
 async function loadQueue() {
-  const data = await api('/messages?status=queued&limit=200');
+  const filterState = $('#queue-filter-state').value;
+  const query = $('#queue-filter-q').value.trim().toLowerCase();
+  const statuses = filterState === 'all' ? ['queued', 'failed', 'send_unknown'] : [filterState];
+  const responses = await Promise.all(statuses.map((status) => api('/messages?status=' + encodeURIComponent(status) + '&limit=200')));
   const list = $('#queue-list');
-  const messages = data.messages || [];
+  const messages = responses.flatMap((data) => data.messages || []).filter((message) => !query || [message.lead_company, message.lead_email, message.to_email, message.subject, message.status_reason, message.error_detail].filter(Boolean).join(' ').toLowerCase().includes(query));
+  state.queueMessages = messages;
+  state.queueSelection = new Set([...state.queueSelection].filter((id) => messages.some((message) => message.id === id && message.status === 'queued')));
+  const actions = $('#queue-actions');
+  actions.classList.toggle('hidden', !messages.some((message) => message.status === 'queued'));
+  $('#queue-selection-status').textContent = state.queueSelection.size + ' selected';
   if (!messages.length) {
     list.replaceChildren(el('p', { class: 'empty' }, 'The send queue is empty.')); return;
   }
   list.replaceChildren(...messages.sort((a, b) => String(a.scheduled_at || a.updated_at).localeCompare(String(b.scheduled_at || b.updated_at))).map((message) => el('div', { class: 'card' },
-    el('div', { class: 'row' }, el('b', { class: 'grow' }, message.lead_company || message.lead_email || message.to_email || 'Unknown recipient'), chip('queued', 'st-'), el('span', { class: 'muted small' }, message.scheduled_at ? 'Scheduled ' + fmtDate(message.scheduled_at) : 'Awaiting next send window')),
+    el('div', { class: 'row' }, message.status === 'queued' ? el('input', { type: 'checkbox', checked: state.queueSelection.has(message.id), 'aria-label': 'Select queued message', onchange: (event) => { if (event.target.checked) state.queueSelection.add(message.id); else state.queueSelection.delete(message.id); $('#queue-selection-status').textContent = state.queueSelection.size + ' selected'; } }) : null, el('b', { class: 'grow' }, message.lead_company || message.lead_email || message.to_email || 'Unknown recipient'), chip(message.status, 'st-'), el('span', { class: 'muted small' }, message.retry_at ? 'Retry ' + fmtDate(message.retry_at) : message.scheduled_at ? 'Scheduled ' + fmtDate(message.scheduled_at) : 'Awaiting next send window')),
     el('div', { class: 'muted small' }, 'To: ' + (message.to_email || '') + (message.campaign_id ? ' · campaign controlled' : ' · direct queue')),
     el('div', { style: 'margin-top:5px' }, el('b', {}, message.subject || '(no subject)')),
-    message.error ? el('p', { class: 'warning small' }, message.error) : null
+    el('p', { class: message.status === 'queued' && message.retry_at ? 'warning small' : 'muted small' }, message.status_reason || message.error_detail || (message.status === 'queued' ? 'Ready for delivery' : 'Manual action required')),
+    message.error_detail ? el('details', { class: 'small' }, el('summary', { class: 'muted' }, 'Provider detail'), el('pre', {}, message.error_detail)) : null,
+    el('div', { class: 'action-cell', style: 'margin-top:8px' },
+      message.status === 'queued' ? el('button', { class: 'danger', onclick: async () => { if (!confirm('Cancel this queued message?')) return; try { await api('/messages/' + message.id + '/cancel', { method: 'POST' }); toast('Queued message cancelled'); await Promise.all([loadQueue(), loadOverview(), refreshStats()]); } catch (err) { toast(err.message, true); } } }, 'Cancel') : null,
+      message.status === 'queued' ? el('button', { onclick: async () => { const next = prompt('Enter a new ISO time (for example 2026-08-29T09:00:00Z):', message.scheduled_at || new Date().toISOString()); if (!next) return; try { await api('/messages/' + message.id + '/reschedule', { method: 'POST', body: { scheduledAt: next } }); toast('Message rescheduled'); await loadQueue(); } catch (err) { toast(err.message, true); } } }, 'Reschedule') : null,
+      ['failed','send_unknown'].includes(message.status) ? el('button', { class: 'primary', onclick: async () => { const confirmUnknown = message.status === 'send_unknown' ? confirm('Confirm Zoho did not deliver this message before retrying?') : true; if (!confirmUnknown) return; try { await api('/messages/' + message.id + '/retry', { method: 'POST', body: { confirmUnknown, scheduledAt: new Date().toISOString() } }); toast('Retry queued'); await Promise.all([loadQueue(), loadOverview(), refreshStats()]); } catch (err) { toast(err.message, true); } } }, 'Retry') : null
+    )
   )));
 }
 
@@ -1210,6 +1293,7 @@ async function loadSettings() {
   $('#outreach-signoff').value = settings.signoff;
   $('#outreach-sender-name').value = settings.senderName;
   $('#outreach-sender-email').value = settings.senderEmail;
+  $('#outreach-sender-display').value = settings.senderDisplayName || 'Centrisec Ltd';
   $('#outreach-cta').value = settings.cta;
   $('#outreach-footer-html').value = settings.footerHtml || '';
   updateFooterPreview();
@@ -1233,6 +1317,7 @@ function profilePayload() {
     greeting: $('#profile-greeting').value.trim(), fallbackGreeting: $('#profile-fallback').value.trim(), signoff: $('#profile-signoff').value.trim(),
     senderName: $('#profile-sender-name').value.trim(), cta: $('#profile-cta').value.trim(), footerHtml: $('#profile-footer').value,
     confirmZohoApproved: $('#profile-confirm-zoho').checked,
+    displayNameVerified: $('#profile-confirm-display').checked,
   };
 }
 
@@ -1243,19 +1328,19 @@ function updateProfileFooterPreview() {
 
 function editProfile(profile = null) {
   state.profileEditing = profile ? profile.id : null;
-  $('#profile-name').value = profile?.name || ''; $('#profile-display').value = profile?.display_name || '';
+  $('#profile-name').value = profile?.name || ''; $('#profile-display').value = profile?.display_name || 'Centrisec Ltd';
   $('#profile-sender').value = profile?.sender_email || ''; $('#profile-cc').value = profile?.cc_email || ''; $('#profile-bcc').value = profile?.bcc_email || '';
   $('#profile-greeting').value = profile?.greeting || 'Hi'; $('#profile-fallback').value = profile?.fallback_greeting || 'Hello';
   $('#profile-signoff').value = profile?.signoff || 'Best regards'; $('#profile-sender-name').value = profile?.sender_name || '';
-  $('#profile-cta').value = profile?.cta || ''; $('#profile-footer').value = profile?.footer_html || ''; $('#profile-confirm-zoho').checked = false;
+  $('#profile-cta').value = profile?.cta || ''; $('#profile-footer').value = profile?.footer_html || ''; $('#profile-confirm-zoho').checked = false; $('#profile-confirm-display').checked = profile?.display_name_verified === 1;
   $('#profile-feedback').textContent = ''; updateProfileFooterPreview(); $('#profile-editor').classList.remove('hidden');
 }
 
 function renderProfiles(profiles) {
   const list = $('#profile-list');
   list.replaceChildren(...profiles.map((profile) => el('div', { class: 'card', style: 'padding:10px;margin:6px 0' },
-    el('div', { class: 'row' }, el('b', { class: 'grow' }, profile.name), chip(profile.is_verified ? 'verified' : 'unverified', profile.is_verified ? 'cl-' : 'st-'), profile.is_active ? null : chip('inactive', 'st-')),
-    el('div', { class: 'muted small' }, `${profile.sender_email} · replies arrive at the sender mailbox`),
+    el('div', { class: 'row' }, el('b', { class: 'grow' }, profile.name), chip(profile.is_verified ? 'verified' : 'unverified', profile.is_verified ? 'cl-' : 'st-'), profile.display_name_verified ? chip('name verified', 'cl-') : chip('name check needed', 'st-'), profile.is_active ? null : chip('inactive', 'st-')),
+    el('div', { class: 'muted small' }, `${profile.display_name || 'Centrisec Ltd'} · ${profile.sender_email} · replies arrive at the sender mailbox`),
     el('div', { class: 'row', style: 'margin-top:6px' }, el('button', { onclick: () => editProfile(profile) }, 'Edit'))
   )));
 }
@@ -1310,20 +1395,21 @@ async function loadCampaigns() {
   if (!data.campaigns.length) { list.replaceChildren(el('div', { class: 'card empty' }, 'No campaigns yet. Create a draft campaign, add leads, then activate it when ready.')); return; }
   list.replaceChildren(...data.campaigns.map((c) => el('div', { class: 'card' },
     el('div', { class: 'row' }, el('b', { class: 'grow' }, c.name), chip(c.status, 'st-'), el('span', { class: 'muted small' }, c.sender_profile_name || 'No sender profile')),
-    el('div', { class: 'muted small', style: 'margin-top:5px' }, `${c.audience_count || 0} audience · ${c.sent_count || 0} sent · ${c.replied_count || 0} replied · ${c.send_window} ${c.timezone}`),
+    el('div', { class: 'muted small', style: 'margin-top:5px' }, `${c.audience_count || 0} audience · ${c.sent_count || 0} sent · ${c.replied_count || 0} replied · ${c.queued_count || 0} queued · ${c.attention_count || 0} attention`),
+    el('div', { class: 'muted small', style: 'margin-top:3px' }, `${c.send_window} ${c.timezone} · ${c.next_scheduled_at ? 'Next ' + fmtDate(c.next_scheduled_at) : 'No queued send'}`),
     el('div', { class: 'row', style: 'margin-top:10px' },
       el('button', { class: 'primary', onclick: () => openCampaign(c.id) }, 'Open'),
       el('button', { onclick: () => fillCampaignForm(c) }, 'Edit'),
       el('button', { onclick: async () => { try { await api('/campaigns/' + c.id + '/clone', { method: 'POST' }); toast('Campaign cloned as a draft'); await loadCampaigns(); } catch (err) { toast(err.message, true); } } }, 'Clone'),
       c.status === 'active' ? el('button', { onclick: () => updateCampaignStatus(c.id, 'paused') }, 'Pause') : c.status === 'paused' || c.status === 'draft' ? el('button', { onclick: () => updateCampaignStatus(c.id, 'active') }, 'Activate') : null,
-      c.status !== 'archived' ? el('button', { class: 'danger', onclick: async () => { if (!confirm('Stop all unsent messages in this campaign? This cannot be undone.')) return; try { const result = await api('/campaigns/' + c.id + '/stop-unsent', { method: 'POST' }); toast(result.stopped + ' unsent message(s) stopped'); await loadCampaigns(); } catch (err) { toast(err.message, true); } } }, 'Stop unsent') : null,
+      c.status !== 'archived' ? el('button', { class: 'danger', onclick: async () => { if (!confirm('Stop all unsent messages in this campaign? This cannot be undone.')) return; try { const result = await api('/campaigns/' + c.id + '/stop-unsent', { method: 'POST' }); toast(result.stopped + ' unsent message(s) stopped'); await Promise.all([loadCampaigns(), loadOverview(), refreshStats()]); } catch (err) { toast(err.message, true); } } }, 'Stop unsent') : null,
       c.status !== 'archived' ? el('button', { class: 'danger', onclick: () => updateCampaignStatus(c.id, 'archived') }, 'Archive') : null
     )
   )));
 }
 
 async function updateCampaignStatus(id, status) {
-  try { await api('/campaigns/' + id, { method: 'PATCH', body: { status } }); toast('Campaign ' + status); await Promise.all([loadCampaigns(), refreshStats()]); }
+  try { await api('/campaigns/' + id, { method: 'PATCH', body: { status } }); toast('Campaign ' + status); await Promise.all([loadCampaigns(), loadOverview(), refreshStats()]); }
   catch (err) { toast(err.message, true); }
 }
 
@@ -1332,7 +1418,7 @@ async function openCampaign(id) {
   const c = data.campaign;
   const ids = el('textarea', { rows: '3', placeholder: 'Paste lead IDs, separated by commas or new lines' });
   const audience = el('div', {}, ...(data.audience.length ? data.audience.map((lead) => el('div', { class: 'row card', style: 'padding:8px;margin:6px 0' },
-    el('span', { class: 'grow' }, lead.email, lead.company ? ' · ' + lead.company : ''), chip(lead.campaign_status, 'st-'))) : [el('p', { class: 'empty' }, 'No leads assigned yet.')]));
+    el('span', { class: 'grow' }, lead.email, lead.company ? ' · ' + lead.company : '', lead.role ? ' · ' + lead.role : ''), chip(lead.campaign_status, 'st-'), lead.status_reason ? el('span', { class: 'muted small' }, lead.status_reason) : null)) : [el('p', { class: 'empty' }, 'No leads assigned yet.')]));
   const timeline = el('div', { class: 'timeline' }, ...(data.events.length ? data.events.map((event) => el('div', {}, el('b', {}, event.event), ' ', el('span', { class: 'muted' }, fmtDate(event.created_at)))) : [el('div', { class: 'muted' }, 'No campaign activity yet.')]));
   const add = el('button', { class: 'primary' }, 'Add leads');
   add.addEventListener('click', async () => {
@@ -1352,7 +1438,7 @@ async function openCampaign(id) {
   });
   $('#modal-content').replaceChildren(
     el('div', { class: 'row' }, el('h2', { class: 'grow', style: 'margin:0' }, c.name), chip(c.status, 'st-'), el('button', { onclick: () => closeLayer('modal') }, 'Close')),
-    el('div', { class: 'kv' }, el('div', {}, 'Sender'), el('div', {}, data.profile ? `${data.profile.name} · ${data.profile.sender_email}` : 'Missing'), el('div', {}, 'Automation'), el('div', {}, `${c.auto_send ? 'Auto-send on' : 'Manual queue'} · ${c.follow_up_enabled ? 'one follow-up in ' + c.follow_up_delay_business_days + ' business days' : 'No follow-up'}`), el('div', {}, 'Policy'), el('div', {}, `${c.quality_policy} · ${c.daily_cap}/day · ${c.domain_weekly_cap}/domain/week`)),
+    el('div', { class: 'kv' }, el('div', {}, 'Sender'), el('div', {}, data.profile ? `${data.profile.name} · ${data.profile.sender_email}` : 'Missing'), el('div', {}, 'Automation'), el('div', {}, `${c.auto_send ? 'Auto-send on' : 'Manual queue'} · ${c.follow_up_enabled ? 'one follow-up in ' + c.follow_up_delay_business_days + ' business days' : 'No follow-up'}`), el('div', {}, 'Policy'), el('div', {}, `${c.quality_policy} · ${c.daily_cap}/day · ${c.domain_weekly_cap}/domain/week`), el('div', {}, 'Next send'), el('div', {}, c.next_scheduled_at ? fmtDate(c.next_scheduled_at) : 'Nothing queued yet')),
     el('h3', {}, 'Audience'), ids, el('div', { class: 'row', style: 'margin-top:8px' }, add, draft), audience,
     el('h3', {}, 'Funnel'), el('pre', {}, JSON.stringify(data.funnel, null, 2)),
     el('h3', {}, 'Activity'), timeline
@@ -1363,7 +1449,7 @@ async function openCampaign(id) {
 /* ---------- Tabs / init ---------- */
 
 const loaders = {
-  pipeline: loadLeads,
+  pipeline: loadPipeline,
   campaigns: loadCampaigns,
   drafts: loadDrafts,
   queue: loadQueue,
@@ -1417,6 +1503,33 @@ $('#page-next').addEventListener('click', () => {
 });
 $('#drafts-refresh').addEventListener('click', () => loadDrafts().catch((e) => toast(e.message, true)));
 $('#queue-refresh').addEventListener('click', () => loadQueue().catch((e) => toast(e.message, true)));
+$('#queue-filter-state').addEventListener('change', () => loadQueue().catch((e) => toast(e.message, true)));
+$('#queue-filter-q').addEventListener('input', () => loadQueue().catch((e) => toast(e.message, true)));
+$('#queue-select-visible').addEventListener('click', () => {
+  for (const message of state.queueMessages) if (message.status === 'queued') state.queueSelection.add(message.id);
+  $('#queue-selection-status').textContent = state.queueSelection.size + ' selected';
+  loadQueue().catch((e) => toast(e.message, true));
+});
+$('#queue-clear-selection').addEventListener('click', () => {
+  state.queueSelection.clear();
+  $('#queue-selection-status').textContent = '0 selected';
+  loadQueue().catch((e) => toast(e.message, true));
+});
+$('#queue-cancel-selected').addEventListener('click', async () => {
+  const ids = [...state.queueSelection];
+  if (!ids.length) { toast('Select at least one queued message', true); return; }
+  if (!confirm('Cancel ' + ids.length + ' queued message(s)?')) return;
+  const button = $('#queue-cancel-selected'); button.disabled = true;
+  let cancelled = 0;
+  try {
+    for (const id of ids) {
+      try { await api('/messages/' + id + '/cancel', { method: 'POST' }); cancelled++; } catch { /* report aggregate below */ }
+    }
+    state.queueSelection.clear();
+    toast(cancelled + ' queued message(s) cancelled');
+    await Promise.all([loadQueue(), loadOverview(), refreshStats()]);
+  } finally { button.disabled = false; }
+});
 $('#draft-queue-plan').addEventListener('change', () => {
   const plan = $('#draft-queue-plan').value;
   if (plan !== 'custom') $('#draft-send-amount').value = plan;
@@ -1535,6 +1648,7 @@ $('#outreach-settings-save').addEventListener('click', async () => {
       signoff: $('#outreach-signoff').value,
       senderName: $('#outreach-sender-name').value,
       senderEmail: $('#outreach-sender-email').value,
+      senderDisplayName: $('#outreach-sender-display').value,
       cta,
       footerHtml: $('#outreach-footer-html').value,
     } });

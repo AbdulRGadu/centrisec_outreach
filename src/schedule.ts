@@ -3,6 +3,7 @@ import type { Env } from './env';
 import { advancePipeline } from './pipeline';
 import { getCampaign, getSenderProfile, recordSequenceEvent, renderCampaignTemplate, senderProfileSettings } from './services/campaigns';
 import { isSuppressed } from './suppression';
+import { safeSenderDisplayName } from './services/outreachSettings';
 import type { LeadRow, MessageRow } from './types';
 import { businessDaysElapsed } from './util/time';
 
@@ -39,7 +40,9 @@ async function sweep(env: Env): Promise<void> {
   for (const row of stuck.results) {
     await env.DB
       .prepare(
-        `UPDATE messages SET status = 'send_unknown', updated_at = datetime('now')
+        `UPDATE messages SET status = 'send_unknown', sendability_status = 'blocked',
+            status_reason = 'Send outcome is unknown; review before retrying',
+            next_action = 'manual_review', updated_at = datetime('now')
          WHERE id = ?1 AND status = 'sending'`
       )
       .bind(row.id)
@@ -95,7 +98,8 @@ async function sweep(env: Env): Promise<void> {
     } else {
       await env.DB
         .prepare(
-          `UPDATE messages SET status = 'failed', error = 'gave up after 20 attempts', updated_at = datetime('now')
+          `UPDATE messages SET status = 'failed', sendability_status = 'blocked', status_reason = 'Queue retry limit reached; review provider status',
+              error = 'gave up after 20 attempts', next_action = 'manual_review', updated_at = datetime('now')
            WHERE id = ?1 AND status = 'queued'`
         )
         .bind(row.id)
@@ -160,6 +164,7 @@ async function queueDueFollowUps(env: Env): Promise<void> {
     const id = crypto.randomUUID();
     const snapshot = row.settings_snapshot || JSON.stringify({
       senderEmail: profile.sender_email,
+      senderDisplayName: safeSenderDisplayName(profile.display_name),
       replyEmail: profile.reply_email,
       ccEmail: profile.cc_email,
       bccEmail: profile.bcc_email,
@@ -167,14 +172,14 @@ async function queueDueFollowUps(env: Env): Promise<void> {
       campaignId: campaign.id,
     });
     await env.DB.prepare(
-      `INSERT INTO messages (id,lead_id,direction,status,subject,body,from_email,to_email,campaign_id,sender_profile_id,sequence_step,settings_snapshot,quality_snapshot,next_action)
-       VALUES (?1,?2,'outbound','queued',?3,?4,?5,?6,?7,?8,2,?9,?10,'wait_for_reply')`
+      `INSERT INTO messages (id,lead_id,direction,status,subject,body,from_email,to_email,campaign_id,sender_profile_id,sequence_step,settings_snapshot,quality_snapshot,next_action,sendability_status,status_reason,sender_display_name)
+       VALUES (?1,?2,'outbound','queued',?3,?4,?5,?6,?7,?8,2,?9,?10,'wait_for_reply','sendable','Scheduled follow-up',?11)`
     ).bind(
       id, lead.id, `Following up: ${row.subject || 'Centrisec'}`, body, profile.sender_email, lead.email,
-      campaign.id, profile.id, snapshot, JSON.stringify({ status: 'sendable', source: 'approved_follow_up_template' })
+      campaign.id, profile.id, snapshot, JSON.stringify({ status: 'sendable', source: 'approved_follow_up_template' }), safeSenderDisplayName(profile.display_name)
     ).run();
     await env.SEND_QUEUE.send({ type: 'send', messageId: id });
-    await env.DB.prepare(`UPDATE campaign_leads SET status='queued',updated_at=datetime('now') WHERE campaign_id=?1 AND lead_id=?2`).bind(campaign.id, lead.id).run();
+    await env.DB.prepare(`UPDATE campaign_leads SET status='queued',status_reason='Scheduled follow-up',updated_at=datetime('now') WHERE campaign_id=?1 AND lead_id=?2`).bind(campaign.id, lead.id).run();
     await recordEvent(env.DB, lead.id, 'follow_up_queued', { message_id: id, campaign_id: campaign.id });
     await recordSequenceEvent(env, campaign.id, lead.id, id, 'follow_up_queued', { after_business_days: campaign.follow_up_delay_business_days });
   }

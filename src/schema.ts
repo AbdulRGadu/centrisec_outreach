@@ -3,10 +3,11 @@ import type { ProspectSegment } from './services/leadSegmentation';
 import schemaConvergenceMigration from '../migrations/0007_production_schema_convergence.sql';
 import campaignWorkspaceMigration from '../migrations/0008_campaign_workspace.sql';
 import scheduledQueueMigration from '../migrations/0009_scheduled_send_queue.sql';
+import operationalStateMigration from '../migrations/0010_operational_message_states.sql';
 import { formatD1ExecScript } from './util/sql';
 
-const MIGRATION_ID = 9;
-const MIGRATION_NAME = '0009_scheduled_send_queue.sql';
+const MIGRATION_ID = 10;
+const MIGRATION_NAME = '0010_operational_message_states.sql';
 const REQUIRED_COLUMNS = {
   leads: {
     sub_industry: 'sub_industry TEXT',
@@ -38,6 +39,25 @@ const REQUIRED_COLUMNS = {
     settings_snapshot: 'settings_snapshot TEXT',
     quality_snapshot: 'quality_snapshot TEXT',
     scheduled_at: 'scheduled_at TEXT',
+    sendability_status: "sendability_status TEXT NOT NULL DEFAULT 'needs_review'",
+    status_reason: 'status_reason TEXT',
+    error_code: 'error_code TEXT',
+    error_detail: 'error_detail TEXT',
+    retry_at: 'retry_at TEXT',
+    last_attempt_at: 'last_attempt_at TEXT',
+    sender_display_name: 'sender_display_name TEXT',
+    provider_status: 'provider_status TEXT',
+    stopped_at: 'stopped_at TEXT',
+    stopped_reason: 'stopped_reason TEXT',
+  },
+} as const;
+
+const OPERATIONAL_REQUIRED_COLUMNS = {
+  sender_profiles: {
+    display_name_verified: 'display_name_verified INTEGER NOT NULL DEFAULT 0',
+  },
+  campaign_leads: {
+    status_reason: 'status_reason TEXT',
   },
 } as const;
 
@@ -84,6 +104,10 @@ const SCHEDULED_QUEUE_RUNTIME_SCHEMA = formatD1ExecScript(scheduledQueueMigratio
   .split('\n')
   .filter((statement) => !/^ALTER TABLE /i.test(statement))
   .join('\n');
+const OPERATIONAL_RUNTIME_SCHEMA = formatD1ExecScript(operationalStateMigration)
+  .split('\n')
+  .filter((statement) => !/^ALTER TABLE /i.test(statement))
+  .join('\n');
 
 let readiness: Promise<void> | null = null;
 
@@ -116,7 +140,12 @@ async function schemaIsReady(db: D1Database): Promise<boolean> {
   const tables = await db.prepare(
     "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('sender_profiles','campaigns','campaign_leads','campaign_templates','campaign_send_policies','campaign_send_counters','sequence_events')"
   ).all<{ name: string }>();
-  return tables.results.length === 7;
+  if (tables.results.length !== 7) return false;
+  const [profileColumns, campaignLeadColumns] = await Promise.all([
+    tableColumns(db, 'sender_profiles'),
+    tableColumns(db, 'campaign_leads'),
+  ]);
+  return profileColumns.has('display_name_verified') && campaignLeadColumns.has('status_reason');
 }
 
 async function recordMigration(db: D1Database): Promise<void> {
@@ -159,6 +188,18 @@ async function applyRequiredSchema(env: Env): Promise<void> {
     await ensureColumn(env.DB, 'campaigns' as keyof typeof REQUIRED_COLUMNS, name, definition);
   }
   await env.DB.exec(SCHEDULED_QUEUE_RUNTIME_SCHEMA);
+  for (const [table, columns] of Object.entries(OPERATIONAL_REQUIRED_COLUMNS)) {
+    for (const [name, definition] of Object.entries(columns)) {
+      const existing = await tableColumns(env.DB, table);
+      if (existing.has(name)) continue;
+      try {
+        await env.DB.prepare(`ALTER TABLE ${table} ADD COLUMN ${definition}`).run();
+      } catch (error) {
+        if (!(await tableColumns(env.DB, table)).has(name)) throw error;
+      }
+    }
+  }
+  await env.DB.exec(OPERATIONAL_RUNTIME_SCHEMA);
   if (!(await schemaIsReady(env.DB))) throw new Error('Campaign workspace schema remains incomplete');
   await recordMigration(env.DB);
 }
